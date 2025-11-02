@@ -1,0 +1,10 @@
+.env
+free-serch-mcp-remote-server
+free-serch-mcp-remote-server/*
+data
+artifacts
+package-lock.json
+package.json
+node_modules
+_package.json
+archives

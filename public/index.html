@@ -1,0 +1,1475 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAI API UI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+        }
+
+        .container {
+            display: flex;
+            flex: 1;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            width: 280px;
+            background: #2a2a2a;
+            border-right: 1px solid #3a3a3a;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid #3a3a3a;
+            flex-shrink: 0;
+        }
+
+        .sidebar-header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #fff;
+        }
+
+        .new-thread-btn {
+            width: 100%;
+            padding: 10px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .new-thread-btn:hover {
+            background: #0052a3;
+        }
+
+        .token-usage-panel {
+            padding: 15px;
+            background: #333;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+
+        .token-usage-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #aaa;
+            margin-bottom: 10px;
+        }
+
+        .token-usage-item {
+            margin-bottom: 12px;
+        }
+
+        .token-usage-label {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 4px;
+        }
+
+        .token-usage-bar {
+            width: 100%;
+            height: 8px;
+            background: #222;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .token-usage-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #0066cc, #00aaff);
+            transition: width 0.3s ease;
+        }
+
+        .token-usage-fill.warning {
+            background: linear-gradient(90deg, #ff8800, #ffaa00);
+        }
+
+        .token-usage-fill.danger {
+            background: linear-gradient(90deg, #ff3333, #ff5555);
+        }
+
+        .token-usage-text {
+            font-size: 11px;
+            color: #aaa;
+            margin-top: 4px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .threads-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .thread-item {
+            padding: 12px;
+            margin-bottom: 4px;
+            background: #333;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .thread-item:hover {
+            background: #3a3a3a;
+        }
+
+        .thread-item.active {
+            background: #0066cc;
+        }
+
+        .thread-item-title {
+            font-weight: 500;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .thread-item-date {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .main-content {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            background: #1a1a1a;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            max-height: 85vh;
+            overflow-y: auto;
+            padding-right: 12px;
+            padding: 20px;
+            border-bottom: 1px solid #3a3a3a;
+            background: #2a2a2a;
+            flex-shrink: 0;
+        }
+
+        .chat-header h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .chat-header::-webkit-scrollbar {
+            width: 6px;
+        }
+        .chat-header::-webkit-scrollbar-track {
+            background: #2a2a2a;
+        }
+        .chat-header::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 3px;
+        }
+
+        .model-selector {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .model-selector label {
+            font-size: 13px;
+            color: #aaa;
+        }
+
+        .model-selector select {
+            padding: 6px 10px;
+            background: #333;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .model-selector select:hover {
+            background: #3a3a3a;
+        }
+
+        .system-prompt-header {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .system-prompt-header label {
+            font-size: 13px;
+            color: #aaa;
+        }
+
+        .system-prompt-header select {
+            padding: 6px 10px;
+            background: #333;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .system-prompt-header select:hover {
+            background: #3a3a3a;
+        }
+
+        .system-prompt-wrapper {
+            margin-top: 16px;
+            background: #262626;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            padding: 12px;
+        }
+
+        .system-prompt-wrapper.hidden {
+            display: none;
+        }
+
+        .system-prompt-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .system-prompt-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #ddd;
+        }
+
+        .system-prompt-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .system-prompt-status {
+            font-size: 12px;
+            color: #66c0ff;
+        }
+
+        .system-prompt-toggle {
+            padding: 6px 12px;
+            background: #444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .system-prompt-toggle:hover {
+            background: #555;
+        }
+
+        .system-prompt-panel {
+            margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .system-prompt-panel.hidden {
+            display: none;
+        }
+
+        .system-prompt-textarea {
+            min-height: 120px;
+            font-family: monospace;
+            background: #1e1e1e;
+        }
+
+        .system-prompt-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .system-prompt-section {
+            background: #1f1f1f;
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 10px;
+        }
+
+        .system-prompt-section-title {
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: #aaa;
+        }
+
+        #systemPromptAutoPreview,
+        #systemPromptEffectivePreview {
+            max-height: 200px;
+            overflow: auto;
+        }
+
+        .chat-area {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .chat-area.hidden {
+            display: none;
+        }
+
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .message-header {
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .message.user .message-header {
+            color: #4a9eff;
+        }
+
+        .message.assistant .message-header {
+            color: #00d166;
+        }
+
+        .message-content {
+            padding: 12px 16px;
+            border-radius: 8px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .message.user .message-content {
+            background: #2a3f5f;
+            max-width: 80%;
+        }
+
+        .message.assistant .message-content {
+            background: #1a3a2a;
+            max-width: 90%;
+        }
+
+        .message-timestamp {
+            font-size: 11px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        .input-area {
+            padding: 20px;
+            border-top: 1px solid #3a3a3a;
+            background: #2a2a2a;
+            flex-shrink: 0;
+        }
+
+        .input-form {
+            display: flex;
+            gap: 10px;
+        }
+
+        .message-input {
+            flex: 1;
+            padding: 12px;
+            background: #333;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 14px;
+            resize: vertical;
+            min-height: 80px;
+            font-family: inherit;
+        }
+
+        .message-input:focus {
+            outline: none;
+            border-color: #0066cc;
+        }
+
+        .send-btn {
+            padding: 12px 24px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+            align-self: flex-end;
+        }
+
+        .send-btn:hover:not(:disabled) {
+            background: #0052a3;
+        }
+
+        .send-btn:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            padding: 40px;
+        }
+
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        .empty-state-text {
+            font-size: 18px;
+            color: #666;
+            text-align: center;
+        }
+
+        /* アーティファクトパネル */
+        .artifacts-panel {
+            width: 320px;
+            background: #2a2a2a;
+            border-left: 1px solid #3a3a3a;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .artifacts-header {
+            padding: 20px;
+            border-bottom: 1px solid #3a3a3a;
+            flex-shrink: 0;
+        }
+
+        .artifacts-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .create-artifact-btn {
+            width: 100%;
+            padding: 8px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .create-artifact-btn:hover:not(:disabled) {
+            background: #0052a3;
+        }
+
+        .create-artifact-btn:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        .artifacts-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .artifact-item {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: #333;
+            border-radius: 6px;
+        }
+
+        .artifact-filename {
+            font-weight: 500;
+            margin-bottom: 4px;
+            word-break: break-all;
+        }
+
+        .artifact-meta {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .artifact-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .artifact-btn {
+            padding: 4px 8px;
+            background: #444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        .artifact-btn:hover {
+            background: #555;
+        }
+
+        /* モーダル */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #2a2a2a;
+            padding: 24px;
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .form-input,
+        .form-textarea,
+        .form-select {
+            width: 100%;
+            padding: 10px;
+            background: #333;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #e0e0e0;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .form-textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .form-input:focus,
+        .form-textarea:focus,
+        .form-select:focus {
+            outline: none;
+            border-color: #0066cc;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .btn-primary {
+            background: #0066cc;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #0052a3;
+        }
+
+        .btn-secondary {
+            background: #444;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #555;
+        }
+
+        .delete-thread-btn {
+            margin-top: 8px;
+            padding: 6px 12px;
+            background: #cc0000;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .delete-thread-btn:hover {
+            background: #aa0000;
+        }
+
+        .thread-delete-container {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #3a3a3a;
+        }
+
+        pre {
+            background: #1a1a1a;
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+            margin: 8px 0;
+        }
+
+        code {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 左サイドバー：スレッド一覧 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>OpenAI API UI</h1>
+                <button class="new-thread-btn" onclick="showNewThreadModal()">+ 新規スレッド</button>
+                
+                <!-- トークン使用量パネル -->
+                <div class="token-usage-panel">
+                    <div class="token-usage-title">トークン使用量 (24h)</div>
+                    
+                    <div class="token-usage-item">
+                        <div class="token-usage-label">High Cost Models (1M/day)</div>
+                        <div class="token-usage-bar">
+                            <div id="highCostBar" class="token-usage-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="token-usage-text">
+                            <span id="highCostUsage">0</span>
+                            <span id="highCostPercent">0%</span>
+                        </div>
+                    </div>
+                    
+                    <div class="token-usage-item">
+                        <div class="token-usage-label">Low Cost Models (10M/day)</div>
+                        <div class="token-usage-bar">
+                            <div id="lowCostBar" class="token-usage-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="token-usage-text">
+                            <span id="lowCostUsage">0</span>
+                            <span id="lowCostPercent">0%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="threadsList" class="threads-list"></div>
+        </div>
+
+        <!-- メインコンテンツ：チャット -->
+        <div class="main-content">
+            <div class="chat-header">
+                <h2 id="chatTitle">スレッドを選択してください</h2>
+                <!-- モデル管理カード -->
+                <div class="model-selector" id="modelSelector" style="display: none;">
+                    <label for="modelSelect">モデル:</label>
+                    <select id="modelSelect" onchange="changeModel()"></select>
+                </div>
+                <!-- システムプロンプト管理カード -->
+                <div class="system-prompt-header">
+                    <div class="system-prompt-controls">
+                        <span id="systemPromptStatus" class="system-prompt-status">システムプロンプト 自動同期中</span>
+                        <button class="system-prompt-toggle" onclick="toggleSystemPromptPanel()">表示/非表示</button>
+                    </div>
+                </div>
+                <div id="systemPromptWrapper" class="system-prompt-wrapper hidden">
+                    <div id="systemPromptPanel" class="system-prompt-panel">
+                        <label class="form-label">ユーザー編集可能なベースプロンプト</label>
+                        <textarea id="systemPromptUserInput" class="form-textarea system-prompt-textarea" spellcheck="false"></textarea>
+                        <div class="system-prompt-actions">
+                            <button id="systemPromptSaveBtn" class="btn btn-primary" onclick="saveSystemPrompt()" disabled>保存</button>
+                            <button class="btn btn-secondary" onclick="refreshSystemPrompt()" disabled>再読み込み</button>
+                        </div>
+                        <div class="system-prompt-section">
+                            <div class="system-prompt-section-title">自動連携アーティファクト一覧 (JSON)</div>
+                            <pre><code id="systemPromptAutoPreview">{}</code></pre>
+                        </div>
+                        <div class="system-prompt-section">
+                            <div class="system-prompt-section-title">送信時に利用されるシステムプロンプト</div>
+                            <pre><code id="systemPromptEffectivePreview"></code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="chatArea" class="chat-area hidden">
+                <div id="messagesContainer" class="messages-container"></div>
+                <div class="input-area">
+                    <form class="input-form" onsubmit="sendMessage(event)">
+                        <textarea 
+                            id="messageInput" 
+                            class="message-input" 
+                            placeholder="メッセージを入力... (Shift+Enterで送信)"
+                            onkeydown="handleInputKeydown(event)"
+                        ></textarea>
+                        <button id="sendBtn" type="submit" class="send-btn">送信</button>
+                    </form>
+                </div>
+            </div>
+
+            <div id="emptyState" class="empty-state">
+                <div class="empty-state-icon">💬</div>
+                <div class="empty-state-text">
+                    新しいスレッドを作成するか、<br>既存のスレッドを選択してください
+                </div>
+            </div>
+        </div>
+
+        <!-- 右サイドバー：アーティファクト -->
+        <div class="artifacts-panel">
+            <div class="artifacts-header">
+                <h3>アーティファクト</h3>
+                <button class="create-artifact-btn" onclick="showCreateArtifactModal()" id="createArtifactBtn" disabled>+ 新規作成</button>
+            </div>
+            <div class="artifacts-list" id="artifactsList">
+                <div style="padding: 20px; text-align: center; color: #666;">読み込み中...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- モーダル群 -->
+    <div id="newThreadModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">新規スレッド作成</div>
+            <form onsubmit="createThread(event)">
+                <div class="form-group">
+                    <label class="form-label">タイトル</label>
+                    <input type="text" id="threadTitle" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">モデル</label>
+                    <select id="threadModel" class="form-select"></select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">システムプロンプト</label>
+                    <textarea id="threadSystemPrompt" class="form-textarea">You are a helpful assistant.</textarea>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('newThreadModal')">キャンセル</button>
+                    <button type="submit" class="btn btn-primary">作成</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="editPromptModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">システムプロンプト編集</div>
+            <form onsubmit="updateSystemPrompt(event)">
+                <div class="form-group">
+                    <label class="form-label">システムプロンプト</label>
+                    <textarea id="editSystemPrompt" class="form-textarea"></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('editPromptModal')">キャンセル</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+            <div class="thread-delete-container">
+                <button class="delete-thread-btn" onclick="deleteCurrentThread()">このスレッドを削除</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="artifactModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header" id="artifactModalTitle">アーティファクト</div>
+            <div class="form-group">
+                <pre><code id="artifactContent"></code></pre>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-primary" onclick="editCurrentArtifact()">編集</button>
+                <button type="button" class="btn btn-primary" onclick="downloadCurrentArtifact()">ダウンロード</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('artifactModal')">閉じる</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="createArtifactModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">アーティファクトを作成</div>
+            <form onsubmit="createArtifact(event)">
+                <div class="form-group">
+                    <label class="form-label">ファイル名</label>
+                    <input type="text" class="form-input" id="artifactFilename" placeholder="example.js" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">コンテンツ</label>
+                    <textarea class="form-textarea" id="artifactContentInput" style="min-height: 300px; font-family: monospace;" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">説明（オプション）</label>
+                    <input type="text" class="form-input" id="artifactDescription">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('createArtifactModal')">キャンセル</button>
+                    <button type="submit" class="btn btn-primary">作成</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="editArtifactModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">アーティファクトを編集</div>
+            <form onsubmit="saveArtifactEdit(event)">
+                <div class="form-group">
+                    <label class="form-label">ファイル名</label>
+                    <input type="text" class="form-input" id="editArtifactFilename" readonly>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">コンテンツ</label>
+                    <textarea class="form-textarea" id="editArtifactContent" style="min-height: 300px; font-family: monospace;" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">説明（オプション）</label>
+                    <input type="text" class="form-input" id="editArtifactDescription">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('editArtifactModal')">キャンセル</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let currentThreadId = null;
+        let availableModels = [];
+        let currentArtifact = null;
+        let systemPromptState = {
+            user: '',
+            effective: '',
+            artifacts: []
+        };
+
+        async function init() {
+            await loadThreads();
+            await loadModels();
+            await loadTokenUsage();
+            await loadArtifacts();
+            setInterval(loadTokenUsage, 30000);
+        }
+
+        async function loadModels() {
+            try {
+                const response = await fetch('/api/models');
+                const data = await response.json();
+                availableModels = data.availableModels;
+                
+                const modelSelect = document.getElementById('modelSelect');
+                const threadModelSelect = document.getElementById('threadModel');
+                
+                data.availableModels.forEach(model => {
+                    const isHighCost = data.highCostModels.includes(model);
+                    const optionText = `${model}${isHighCost ? ' (1M/day)' : ' (10M/day)'}`;
+                    
+                    const option1 = document.createElement('option');
+                    option1.value = model;
+                    option1.textContent = optionText;
+                    modelSelect.appendChild(option1);
+                    
+                    const option2 = document.createElement('option');
+                    option2.value = model;
+                    option2.textContent = optionText;
+                    if (model === data.defaultModel) option2.selected = true;
+                    threadModelSelect.appendChild(option2);
+                });
+            } catch (error) {
+                console.error('Failed to load models:', error);
+            }
+        }
+
+        async function loadTokenUsage() {
+            try {
+                const response = await fetch('/api/token-usage/stats');
+                const data = await response.json();
+                
+                const highCostUsage = data.last24Hours.highCost.usage;
+                const highCostLimit = data.last24Hours.highCost.limit;
+                const highCostPercent = parseFloat(data.last24Hours.highCost.percentage);
+                
+                document.getElementById('highCostUsage').textContent = 
+                    `${formatTokens(highCostUsage)} / ${formatTokens(highCostLimit)}`;
+                document.getElementById('highCostPercent').textContent = 
+                    `${highCostPercent.toFixed(1)}%`;
+                
+                const highCostBar = document.getElementById('highCostBar');
+                highCostBar.style.width = `${Math.min(highCostPercent, 100)}%`;
+                highCostBar.className = 'token-usage-fill';
+                if (highCostPercent >= 90) highCostBar.classList.add('danger');
+                else if (highCostPercent >= 70) highCostBar.classList.add('warning');
+                
+                const lowCostUsage = data.last24Hours.lowCost.usage;
+                const lowCostLimit = data.last24Hours.lowCost.limit;
+                const lowCostPercent = parseFloat(data.last24Hours.lowCost.percentage);
+                
+                document.getElementById('lowCostUsage').textContent = 
+                    `${formatTokens(lowCostUsage)} / ${formatTokens(lowCostLimit)}`;
+                document.getElementById('lowCostPercent').textContent = 
+                    `${lowCostPercent.toFixed(1)}%`;
+                
+                const lowCostBar = document.getElementById('lowCostBar');
+                lowCostBar.style.width = `${Math.min(lowCostPercent, 100)}%`;
+                lowCostBar.className = 'token-usage-fill';
+                if (lowCostPercent >= 90) lowCostBar.classList.add('danger');
+                else if (lowCostPercent >= 70) lowCostBar.classList.add('warning');
+            } catch (error) {
+                console.error('Failed to load token usage:', error);
+            }
+        }
+
+        function formatTokens(tokens) {
+            if (tokens >= 1000000) return (tokens / 1000000).toFixed(2) + 'M';
+            if (tokens >= 1000) return (tokens / 1000).toFixed(1) + 'K';
+            return tokens.toString();
+        }
+
+        async function changeModel() {
+            if (!currentThreadId) return;
+            const model = document.getElementById('modelSelect').value;
+            
+            try {
+                await fetch(`/api/threads/${currentThreadId}/model`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model })
+                });
+                console.log(`Model changed to: ${model}`);
+            } catch (error) {
+                console.error('Failed to change model:', error);
+                alert('モデルの変更に失敗しました');
+            }
+        }
+
+        async function loadThreads() {
+            try {
+                const response = await fetch('/api/threads');
+                const data = await response.json();
+                const threadsList = document.getElementById('threadsList');
+                
+                if (data.threads.length === 0) {
+                    threadsList.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">スレッドがありません</div>';
+                    return;
+                }
+                
+                threadsList.innerHTML = data.threads
+                    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+                    .map(thread => `
+                        <div class="thread-item ${thread.id === currentThreadId ? 'active' : ''}" 
+                             onclick="loadThread('${thread.id}')">
+                            <div class="thread-item-title">${escapeHtml(thread.title)}</div>
+                            <div class="thread-item-date">${formatDate(thread.updatedAt)}</div>
+                        </div>
+                    `).join('');
+            } catch (error) {
+                console.error('Failed to load threads:', error);
+            }
+        }
+
+        async function loadThread(threadId) {
+            try {
+                const response = await fetch(`/api/threads/${threadId}`);
+                const thread = await response.json();
+                
+                currentThreadId = threadId;
+                document.getElementById('chatTitle').textContent = thread.title;
+                document.getElementById('modelSelector').style.display = 'flex';
+                document.getElementById('modelSelect').value = thread.model || availableModels[0];
+                document.getElementById('createArtifactBtn').disabled = false;
+                document.getElementById('emptyState').style.display = 'none';
+                document.getElementById('chatArea').classList.remove('hidden');
+                
+                applySystemPromptData({
+                    systemPromptUser: thread.systemPromptUser,
+                    systemPrompt: thread.systemPrompt,
+                    artifactInventory: thread.artifactInventory
+                });
+
+                const messagesContainer = document.getElementById('messagesContainer');
+                messagesContainer.innerHTML = '';
+                
+                thread.messages.forEach(msg => {
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = `message ${msg.role}`;
+                    
+                    const headerDiv = document.createElement('div');
+                    headerDiv.className = 'message-header';
+                    headerDiv.textContent = msg.role === 'user' ? 'You' : 'Assistant';
+                    
+                    const contentDiv = document.createElement('div');
+                    contentDiv.className = 'message-content';
+                    contentDiv.textContent = msg.content;
+                    
+                    const timestampDiv = document.createElement('div');
+                    timestampDiv.className = 'message-timestamp';
+                    timestampDiv.textContent = formatDateTime(msg.timestamp);
+                    
+                    messageDiv.appendChild(headerDiv);
+                    messageDiv.appendChild(contentDiv);
+                    messageDiv.appendChild(timestampDiv);
+                    messagesContainer.appendChild(messageDiv);
+                });
+                
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                await loadThreads();
+                await loadArtifacts();
+            } catch (error) {
+                console.error('Failed to load thread:', error);
+            }
+        }
+
+        function showNewThreadModal() {
+            document.getElementById('newThreadModal').classList.add('active');
+            document.getElementById('threadTitle').value = '';
+        }
+
+        async function createThread(event) {
+            event.preventDefault();
+            const title = document.getElementById('threadTitle').value;
+            const model = document.getElementById('threadModel').value;
+            const systemPrompt = document.getElementById('threadSystemPrompt').value;
+            
+            try {
+                const response = await fetch('/api/threads', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, model, systemPrompt })
+                });
+                
+                const thread = await response.json();
+                closeModal('newThreadModal');
+                await loadThreads();
+                await loadThread(thread.id);
+            } catch (error) {
+                console.error('Failed to create thread:', error);
+                alert('スレッドの作成に失敗しました');
+            }
+        }
+
+        async function deleteCurrentThread() {
+            if (!currentThreadId || !confirm('このスレッドを削除してもよろしいですか?')) return;
+            
+            try {
+                await fetch(`/api/threads/${currentThreadId}`, { method: 'DELETE' });
+                closeModal('editPromptModal');
+                currentThreadId = null;
+                document.getElementById('chatTitle').textContent = 'スレッドを選択してください';
+                document.getElementById('modelSelector').style.display = 'none';
+                document.getElementById('createArtifactBtn').disabled = true;
+                document.getElementById('emptyState').style.display = 'flex';
+                document.getElementById('chatArea').classList.add('hidden');
+                await loadThreads();
+                await loadArtifacts();
+            } catch (error) {
+                console.error('Failed to delete thread:', error);
+                alert('スレッドの削除に失敗しました');
+            }
+        }
+
+        function toggleSystemPromptPanel() {
+            const panel = document.getElementById('systemPromptWrapper');
+            panel.classList.toggle('hidden');
+        }
+
+        function applySystemPromptData(data) {
+            systemPromptState.user = data.systemPromptUser || '';
+            systemPromptState.effective = data.systemPrompt || '';
+            systemPromptState.artifacts = data.artifactInventory || [];
+
+            const userInput = document.getElementById('systemPromptUserInput');
+            const autoPreview = document.getElementById('systemPromptAutoPreview');
+            const effectivePreview = document.getElementById('systemPromptEffectivePreview');
+            const saveBtn = document.getElementById('systemPromptSaveBtn');
+            const refreshBtn = document.querySelector('.system-prompt-actions .btn-secondary');
+
+            if (!userInput) return;
+
+            userInput.value = systemPromptState.user;
+            autoPreview.textContent = JSON.stringify(systemPromptState.artifacts, null, 2);
+            effectivePreview.textContent = systemPromptState.effective;
+
+            const disabled = !currentThreadId;
+            userInput.disabled = disabled;
+            saveBtn.disabled = disabled;
+            refreshBtn.disabled = disabled;
+        }
+
+        async function fetchSystemPrompt() {
+            if (!currentThreadId) return;
+            try {
+                const response = await fetch(`/api/threads/${currentThreadId}/system-prompt`);
+                const data = await response.json();
+                applySystemPromptData(data);
+            } catch (error) {
+                console.error('Failed to fetch system prompt:', error);
+            }
+        }
+
+        async function saveSystemPrompt() {
+            if (!currentThreadId) return;
+            try {
+                const basePrompt = document.getElementById('systemPromptUserInput').value;
+                const response = await fetch(`/api/threads/${currentThreadId}/system-prompt`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ systemPrompt: basePrompt })
+                });
+                const data = await response.json();
+                applySystemPromptData(data);
+                document.getElementById('systemPromptStatus').textContent = '保存しました (自動同期中)';
+            } catch (error) {
+                console.error('Failed to save system prompt:', error);
+                alert('システムプロンプトの保存に失敗しました');
+            }
+        }
+
+        async function sendMessage(event) {
+            event.preventDefault();
+            if (!currentThreadId) return;
+
+            const input = document.getElementById('messageInput');
+            const content = input.value.trim();
+            if (!content) return;
+
+            const sendBtn = document.getElementById('sendBtn');
+            const originalText = sendBtn.textContent;
+            sendBtn.disabled = true;
+            sendBtn.textContent = '送信中...';
+            input.disabled = true;
+
+            try {
+                const response = await fetch(`/api/threads/${currentThreadId}/messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'メッセージの送信に失敗しました');
+                }
+
+                input.value = '';
+                await loadThread(currentThreadId);
+                await loadThreads();
+                await loadTokenUsage();
+                await loadArtifacts();
+            } catch (error) {
+                console.error('Failed to send message:', error);
+                alert(`エラー: ${error.message}`);
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = originalText;
+                input.disabled = false;
+                input.focus();
+            }
+        }
+
+        async function loadArtifacts() {
+            try {
+                const url = currentThreadId ? `/api/artifacts?threadId=${currentThreadId}` : '/api/artifacts';
+                const response = await fetch(url);
+                const data = await response.json();
+                const artifactsList = document.getElementById('artifactsList');
+                
+                if (data.artifacts.length === 0) {
+                    const message = currentThreadId ? 'このスレッドにはアーティファクトがありません' : 'アーティファクトがありません';
+                    artifactsList.innerHTML = `<div style="padding: 20px; text-align: center; color: #666;">${message}</div>`;
+                    return;
+                }
+
+                artifactsList.innerHTML = data.artifacts
+                    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+                    .map(artifact => `
+                        <div class="artifact-item">
+                            <div class="artifact-filename">${escapeHtml(artifact.filename)}</div>
+                            <div class="artifact-meta">v${artifact.currentVersion} (${artifact.versionCount} versions)</div>
+                            <div class="artifact-meta">${formatDate(artifact.updatedAt)}</div>
+                            <div class="artifact-actions">
+                                <button class="artifact-btn" onclick="viewArtifact('${artifact.id}')">表示</button>
+                                <button class="artifact-btn" onclick="downloadArtifact('${artifact.id}')">DL</button>
+                                <button class="artifact-btn" style="background: #cc0000;" onclick="deleteArtifact('${artifact.id}')">削除</button>
+                            </div>
+                        </div>
+                    `).join('');
+            } catch (error) {
+                console.error('Failed to load artifacts:', error);
+            }
+        }
+
+        async function viewArtifact(artifactId) {
+            try {
+                const response = await fetch(`/api/artifacts/${artifactId}`);
+                const artifact = await response.json();
+                
+                currentArtifact = artifact;
+                document.getElementById('artifactModalTitle').textContent = `${artifact.filename} (v${artifact.version})`;
+                document.getElementById('artifactContent').textContent = artifact.content;
+                document.getElementById('artifactModal').classList.add('active');
+            } catch (error) {
+                console.error('Failed to view artifact:', error);
+                alert('アーティファクトの表示に失敗しました');
+            }
+        }
+
+        async function downloadArtifact(artifactId) {
+            try {
+                const response = await fetch(`/api/artifacts/${artifactId}`);
+                const artifact = await response.json();
+                
+                const blob = new Blob([artifact.content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = artifact.filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                console.error('Failed to download artifact:', error);
+                alert('ダウンロードに失敗しました');
+            }
+        }
+
+        function downloadCurrentArtifact() {
+            if (!currentArtifact) return;
+            
+            const blob = new Blob([currentArtifact.content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = currentArtifact.filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function showCreateArtifactModal() {
+            if (!currentThreadId) {
+                alert('スレッドを選択してください');
+                return;
+            }
+            
+            document.getElementById('createArtifactModal').classList.add('active');
+            document.getElementById('artifactFilename').value = '';
+            document.getElementById('artifactContentInput').value = '';
+            document.getElementById('artifactDescription').value = '';
+        }
+
+        async function createArtifact(event) {
+            event.preventDefault();
+            if (!currentThreadId) return;
+
+            const filename = document.getElementById('artifactFilename').value;
+            const content = document.getElementById('artifactContentInput').value;
+            const description = document.getElementById('artifactDescription').value;
+
+            try {
+                const response = await fetch('/api/artifacts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filename,
+                        content,
+                        threadId: currentThreadId,
+                        metadata: { description: description || '' }
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'アーティファクトの作成に失敗しました');
+                }
+
+                closeModal('createArtifactModal');
+                await loadArtifacts();
+                await fetchSystemPrompt(); 
+                alert('アーティファクトを作成しました');
+            } catch (error) {
+                console.error('Failed to create artifact:', error);
+                alert(`エラー: ${error.message}`);
+            }
+        }
+
+        function editCurrentArtifact() {
+            if (!currentArtifact) return;
+            
+            document.getElementById('editArtifactFilename').value = currentArtifact.filename;
+            document.getElementById('editArtifactContent').value = currentArtifact.content;
+            document.getElementById('editArtifactDescription').value = currentArtifact.metadata?.description || '';
+            
+            closeModal('artifactModal');
+            document.getElementById('editArtifactModal').classList.add('active');
+        }
+
+        async function saveArtifactEdit(event) {
+            event.preventDefault();
+            if (!currentArtifact) return;
+
+            const content = document.getElementById('editArtifactContent').value;
+            const description = document.getElementById('editArtifactDescription').value;
+
+            try {
+                const response = await fetch(`/api/artifacts/${currentArtifact.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        content,
+                        metadata: { description: description || '' }
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'アーティファクトの編集に失敗しました');
+                }
+
+                closeModal('editArtifactModal');
+                await loadArtifacts();
+                await fetchSystemPrompt();
+                alert('アーティファクトを更新しました');
+            } catch (error) {
+                console.error('Failed to edit artifact:', error);
+                alert(`エラー: ${error.message}`);
+            }
+        }
+
+        async function deleteArtifact(artifactId) {
+            if (!confirm('このアーティファクトを削除してもよろしいですか？')) return;
+            
+            try {
+                const response = await fetch(`/api/artifacts/${artifactId}`, { method: 'DELETE' });
+                if (!response.ok) throw new Error('削除に失敗しました');
+                
+                await loadArtifacts();
+                await fetchSystemPrompt();
+                alert('アーティファクトを削除しました');
+            } catch (error) {
+                console.error('Failed to delete artifact:', error);
+                alert('削除に失敗しました');
+            }
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('active');
+        }
+
+        function handleInputKeydown(event) {
+            if (event.key === 'Enter' && event.shiftKey) {
+                event.preventDefault();
+                sendMessage(event);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(diff / 3600000);
+            const days = Math.floor(diff / 86400000);
+
+            if (minutes < 1) return 'たった今';
+            if (minutes < 60) return `${minutes}分前`;
+            if (hours < 24) return `${hours}時間前`;
+            if (days < 7) return `${days}日前`;
+            return date.toLocaleDateString('ja-JP');
+        }
+
+        function formatDateTime(dateString) {
+            return new Date(dateString).toLocaleString('ja-JP');
+        }
+
+        init();
+    </script>
+</body>
+</html>
