@@ -1,0 +1,26 @@
+{
+  "name": "openai-api-ui-backend",
+  "version": "1.0.0",
+  "description": "OpenAI API powered backend API with thread and artifact management",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "start:mcp": "node node_modules/web-search-mcp-server/dist/server.js"
+  },
+  "keywords": [
+    "gpt-5-codex",
+    "openai",
+    "api",
+    "backend"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^14.0.1",
+    "dotenv": "^16.3.1",
+    "express": "^5.1.0",
+    "openai": "^6.3.0"
+  }
+}
