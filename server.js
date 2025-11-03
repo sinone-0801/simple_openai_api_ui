@@ -67,6 +67,28 @@ const AVAILABLE_MODELS_LOW_COST = [
   'codex-mini-latest'
 ];
 
+const REASONING_MODELS = [
+  'gpt-5',
+  'gpt-5-codex',
+  'gpt-5-chat-latest',
+  'o1',
+  'o3',
+  'gpt-5-mini',
+  'gpt-5-nano',
+  'o1-mini',
+  'o3-mini',
+  'o4-mini',
+  'codex-mini-latest'
+];
+
+const NON_REASONING_MODELS = [
+  'gpt-4.1',
+  'gpt-4o',
+  'gpt-4.1-mini',
+  'gpt-4.1-nano',
+  'gpt-4o-mini'
+];
+
 const FREE_TIER_LIMITS = { highCost: 1_000_000, lowCost: 10_000_000 };
 const LIMIT_THRESHOLD_RATIO = 0.8;
 
@@ -373,6 +395,10 @@ function validateModel(model) {
     valid: false, 
     error: `Invalid model: ${model}. Available models: ${AVAILABLE_MODELS.join(', ')}` 
   };
+}
+
+function isReasoningModel(model) {
+  return REASONING_MODELS.includes(model);
 }
 
 // ====================
@@ -722,21 +748,27 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
         iteration++;
         console.log(`\n🔄 Iteration ${iteration}/${maxIterations}`);
 
-        const response = await client.responses.create({
+        const requestParams = {
           model: selectedModel,
           input: [
             { role: 'developer', content: developerPrompt },
             ...conversationHistory
           ],
-          reasoning: {
-            effort: "medium",
-            summary: "auto",
-          },
           tools: tools,
           tool_choice: "auto",
           parallel_tool_calls: true
-        });
-        
+        };
+
+        // Reasoningモデルの場合のみreasoningパラメータを追加
+        if (isReasoningModel(selectedModel)) {
+          requestParams.reasoning = {
+            effort: "medium",
+            summary: "auto",
+          };
+        }
+
+        const response = await client.responses.create(requestParams);
+
         console.log(`Received response from ${selectedModel}`);
         
         // トークン使用量のログ記録
