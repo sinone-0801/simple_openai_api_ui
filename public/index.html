@@ -696,6 +696,31 @@
             font-family: 'Courier New', Courier, monospace;
             font-size: 13px;
         }
+
+                .markdown-heading {
+            display: block;
+            font-weight: 600;
+            margin: 0.6em 0 0.4em;
+        }
+
+        /* markdown 書式設定 */
+        .markdown-heading.level-1 { font-size: 1.6em; }
+        .markdown-heading.level-2 { font-size: 1.45em; }
+        .markdown-heading.level-3 { font-size: 1.3em; }
+        .markdown-heading.level-4 { font-size: 1.2em; }
+        .markdown-heading.level-5 { font-size: 1.1em; }
+
+        .markdown-bold {
+            font-weight: 700;
+        }
+
+        .markdown-codeblock {
+            display: block;
+            color: #ffcc66;
+            font-family: 'Courier New', Courier, monospace;
+            white-space: pre-wrap;
+            margin: 8px 0;
+        }
     </style>
 </head>
 <body>
@@ -923,6 +948,10 @@
             artifacts: []
         };
 
+        function showUsageLimitPopup() {
+            alert('そろそろ24hの無料利用枠を超えるので、しばらく待ってね！');
+        }
+
         async function init() {
             await loadThreads();
             await loadModels();
@@ -1079,7 +1108,7 @@
                     
                     const contentDiv = document.createElement('div');
                     contentDiv.className = 'message-content';
-                    contentDiv.textContent = msg.content;
+                    contentDiv.innerHTML = formatMarkdownText(msg.content);
                     
                     const timestampDiv = document.createElement('div');
                     timestampDiv.className = 'message-timestamp';
@@ -1097,6 +1126,40 @@
             } catch (error) {
                 console.error('Failed to load thread:', error);
             }
+        }
+        
+        function formatMarkdownText(text) {
+            if (!text) return '';
+
+            let escaped = escapeHtml(text);
+            const codeBlocks = [];
+
+            // 1. コードブロックを一時的にプレースホルダーへ
+            escaped = escaped.replace(/```([\s\S]*?)```/g, (_, code) => {
+                const placeholder = `%%CODEBLOCK_${codeBlocks.length}%%`;
+                codeBlocks.push(code);
+                return placeholder;
+            });
+
+            // 2. 見出し（#〜#####）を装飾
+            escaped = escaped.replace(/(^|\n)(#{1,5})([^\n]*)/g, (match, pre, hashes, content) => {
+                const level = Math.min(hashes.length, 5);
+                return `${pre}<span class="markdown-heading level-${level}">${hashes}${content}</span>`;
+            });
+
+            // 3. 太字（**bold**）を装飾
+            escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<span class="markdown-bold">**$1**</span>');
+
+            // 4. コードブロックを元に戻して装飾
+            codeBlocks.forEach((code, index) => {
+                const placeholder = `%%CODEBLOCK_${index}%%`;
+                escaped = escaped.replace(
+                    placeholder,
+                    `<span class="markdown-codeblock">\`\`\`${code}\`\`\`</span>`
+                );
+            });
+
+            return escaped;
         }
 
         function showNewThreadModal() {
@@ -1225,15 +1288,26 @@
                     body: JSON.stringify({ content })
                 });
 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'メッセージの送信に失敗しました');
+                if (response.status === 429) {
+                    try {
+                        await response.json();
+                    } catch (_) {}
+                    showUsageLimitPopup();
+                    return;
                 }
 
+                if (!response.ok) {
+                    let errorData = null;
+                    try {
+                        errorData = await response.json();
+                    } catch (_) {}
+                    throw new Error(errorData?.error || 'メッセージの送信に失敗しました');
+                }
+
+                await response.json();
                 input.value = '';
                 await loadThread(currentThreadId);
                 await loadThreads();
-                await loadTokenUsage();
                 await loadArtifacts();
             } catch (error) {
                 console.error('Failed to send message:', error);
@@ -1243,6 +1317,7 @@
                 sendBtn.textContent = originalText;
                 input.disabled = false;
                 input.focus();
+                await loadTokenUsage();
             }
         }
 

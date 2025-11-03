@@ -67,6 +67,9 @@ const AVAILABLE_MODELS_LOW_COST = [
   'codex-mini-latest'
 ];
 
+const FREE_TIER_LIMITS = { highCost: 1_000_000, lowCost: 10_000_000 };
+const LIMIT_THRESHOLD_RATIO = 0.8;
+
 console.log(`Default model: ${DEFAULT_MODEL}`);
 console.log(`Available models: ${AVAILABLE_MODELS.join(', ')}`);
 console.log(`High cost models (free 1 million tokens / day): ${AVAILABLE_MODELS_HIGH_COST.join(', ')}`);
@@ -183,6 +186,35 @@ setInterval(compressAndCleanLogs, 60 * 60 * 1000);
 compressAndCleanLogs();
 
 // ユーティリティ関数
+async function getTokenUsageSummary(hours = 24) {
+  const logs = await readTokenLog();
+  const now = new Date();
+  const boundary = new Date(now.getTime() - hours * 60 * 60 * 1000);
+
+  const summary = {
+    highCost: { usage: 0, limit: FREE_TIER_LIMITS.highCost },
+    lowCost: { usage: 0, limit: FREE_TIER_LIMITS.lowCost }
+  };
+
+  for (const log of logs) {
+    if (log.timestamp < boundary) continue;
+    if (AVAILABLE_MODELS_HIGH_COST.includes(log.model)) {
+      summary.highCost.usage += log.total_tokens;
+    } else if (AVAILABLE_MODELS_LOW_COST.includes(log.model)) {
+      summary.lowCost.usage += log.total_tokens;
+    }
+  }
+
+  summary.highCost.percentage = summary.highCost.limit
+    ? (summary.highCost.usage / summary.highCost.limit) * 100
+    : 0;
+  summary.lowCost.percentage = summary.lowCost.limit
+    ? (summary.lowCost.usage / summary.lowCost.limit) * 100
+    : 0;
+
+  return summary;
+}
+
 async function readThreads() {
   try {
     const data = await fs.readFile(THREADS_FILE, 'utf-8');
@@ -544,29 +576,19 @@ app.put('/api/threads/:threadId/model', async (req, res) => {
 
 // トークン使用量の統計を取得
 app.get('/api/token-usage/stats', async (req, res) => {
+  const summary = await getTokenUsageSummary();
   try {
-    const logs = await readTokenLog();
-    const now = new Date();
-    const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const recentLogs = logs.filter(log => log.timestamp >= last24Hours);
-    const highCostUsage = recentLogs
-      .filter(log => AVAILABLE_MODELS_HIGH_COST.includes(log.model))
-      .reduce((sum, log) => sum + log.total_tokens, 0);
-    const lowCostUsage = recentLogs
-      .filter(log => AVAILABLE_MODELS_LOW_COST.includes(log.model))
-      .reduce((sum, log) => sum + log.total_tokens, 0);
-    const FREE_TIER_LIMITS = { highCost: 1000000, lowCost: 10000000 };
     res.json({
       last24Hours: {
         highCost: {
-          usage: highCostUsage,
-          limit: FREE_TIER_LIMITS.highCost,
-          percentage: (highCostUsage / FREE_TIER_LIMITS.highCost * 100).toFixed(2)
+          usage: summary.highCost.usage,
+          limit: summary.highCost.limit,
+          percentage: summary.highCost.percentage.toFixed(2)
         },
         lowCost: {
-          usage: lowCostUsage,
-          limit: FREE_TIER_LIMITS.lowCost,
-          percentage: (lowCostUsage / FREE_TIER_LIMITS.lowCost * 100).toFixed(2)
+          usage: summary.lowCost.usage,
+          limit: summary.lowCost.limit,
+          percentage: summary.lowCost.percentage.toFixed(2)
         }
       }
     });
@@ -592,16 +614,30 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
     const developerPrompt = hydratedThread.systemPrompt;
 
     let conversationHistory = hydratedThread.messages.map(m => ({ role: m.role, content: m.content }));
-    
+
     // モデルの優先順位: リクエスト > スレッド > デフォルト
     let selectedModel = model || thread.model || DEFAULT_MODEL;
-    
+
     // モデルのバリデーション
     const modelValidation = validateModel(selectedModel);
     if (!modelValidation.valid) {
       return res.status(400).json({ error: modelValidation.error });
     }
     selectedModel = modelValidation.model;
+
+    const usageSummary = await getTokenUsageSummary();
+    const modelTier = AVAILABLE_MODELS_HIGH_COST.includes(selectedModel) ? 'highCost' : 'lowCost';
+    const tierUsage = usageSummary[modelTier];
+    if (tierUsage.usage >= tierUsage.limit * LIMIT_THRESHOLD_RATIO) {
+      return res.status(429).json({
+        error: 'TOKEN_LIMIT_APPROACHING',
+        message: '24時間の無料利用枠がまもなく上限に達するため、しばらく待ってから再度お試しください。',
+        usage: {
+          modelTier,
+          ...tierUsage
+        }
+      });
+    }
     
     // ユーザーメッセージを追加
     const userMessage = {
