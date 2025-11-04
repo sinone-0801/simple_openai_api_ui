@@ -864,9 +864,12 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
       ];
 
       let allToolCalls = [];
-      let maxIterations = 5; // 無限ループ防止
+      let maxIterations = 10; // 無限ループ防止
       let iteration = 0;
       let finalResponse;
+
+      // 処理時間の計測開始
+      const startTime = Date.now();
 
       // ツール実行ループ
       while (iteration < maxIterations) {
@@ -1185,6 +1188,9 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
         
         // ツール呼び出しがない場合、最終レスポンスを取得
         finalResponse = response;
+
+        // 処理時間の計測終了
+        console.log(`⏱️  Elapsed time: ${(Date.now() - startTime) / 1000}s`);
         break;
       }
 
