@@ -481,6 +481,29 @@
             flex-direction: column;
         }
 
+        .artifact-dropzone {
+            margin-top: 12px;
+            padding: 16px;
+            border: 2px dashed #555;
+            border-radius: 6px;
+            text-align: center;
+            color: #aaa;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            font-size: 13px;
+        }
+
+        .artifact-dropzone.dragover {
+            border-color: #00aaff;
+            background: rgba(0, 170, 255, 0.1);
+            color: #fff;
+        }
+
+        .artifact-dropzone.disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
         .artifacts-header {
             padding: 20px;
             border-bottom: 1px solid #3a3a3a;
@@ -697,10 +720,10 @@
             font-size: 13px;
         }
 
-                .markdown-heading {
+        .markdown-heading {
             display: block;
             font-weight: 600;
-            margin: 0.6em 0 0.4em;
+            margin: 0.3em 0 0.2em;
         }
 
         /* markdown 書式設定 */
@@ -825,6 +848,10 @@
             <div class="artifacts-header">
                 <h3>アーティファクト</h3>
                 <button class="create-artifact-btn" onclick="showCreateArtifactModal()" id="createArtifactBtn" disabled>+ 新規作成</button>
+                <div id="artifactDropzone" class="artifact-dropzone">
+                    <span id="artifactDropzoneLabel">ファイルをここにドロップ（またはクリック）</span>
+                    <input id="artifactFileInput" type="file" multiple hidden />
+                </div>
             </div>
             <div class="artifacts-list" id="artifactsList">
                 <div style="padding: 20px; text-align: center; color: #666;">読み込み中...</div>
@@ -947,6 +974,127 @@
             effective: '',
             artifacts: []
         };
+        let isUploadingArtifacts = false;
+        let artifactDropzoneUpdater = null;
+
+        function initArtifactDropzone() {
+            const dropzone = document.getElementById('artifactDropzone');
+            const fileInput = document.getElementById('artifactFileInput');
+
+            if (!dropzone || !fileInput) return;
+
+            const updateDropzoneState = () => {
+                dropzone.classList.toggle('disabled', !currentThreadId || isUploadingArtifacts);
+                dropzone.querySelector('#artifactDropzoneLabel').textContent =
+                    !currentThreadId ? 'スレッドを選択してください' :
+                    isUploadingArtifacts ? 'アップロード中...' :
+                    'ファイルをここにドロップ（またはクリック）';
+            };
+
+            const highlight = (evt) => {
+                evt.preventDefault();
+                if (!currentThreadId || isUploadingArtifacts) return;
+                dropzone.classList.add('dragover');
+            };
+
+            const unhighlight = (evt) => {
+                evt.preventDefault();
+                dropzone.classList.remove('dragover');
+            };
+
+            const handleDrop = (evt) => {
+                evt.preventDefault();
+                if (!currentThreadId || isUploadingArtifacts) return;
+                const files = evt.dataTransfer?.files;
+                if (files?.length) {
+                    uploadArtifacts(files);
+                }
+            };
+
+            dropzone.addEventListener('click', () => {
+                if (!currentThreadId || isUploadingArtifacts) return;
+                fileInput.click();
+            });
+
+            dropzone.addEventListener('dragenter', highlight);
+            dropzone.addEventListener('dragover', highlight);
+            dropzone.addEventListener('dragleave', unhighlight);
+            dropzone.addEventListener('drop', (evt) => {
+                unhighlight(evt);
+                handleDrop(evt);
+            });
+
+            fileInput.addEventListener('change', (evt) => {
+                const files = evt.target.files;
+                if (files?.length) {
+                    uploadArtifacts(files);
+                    fileInput.value = '';
+                }
+            });
+
+            updateDropzoneState();
+
+            return updateDropzoneState;
+        }
+
+        async function uploadArtifacts(fileList) {
+            if (!currentThreadId || isUploadingArtifacts) return;
+
+            const formData = new FormData();
+            formData.append('threadId', currentThreadId);
+
+            const metadataMap = {};
+            Array.from(fileList).forEach((file) => {
+                formData.append('files', file);
+                metadataMap[file.name] = {
+                    description: `Uploaded via UI at ${new Date().toISOString()}`
+                };
+            });
+            formData.append('metadata', JSON.stringify(metadataMap));
+
+            isUploadingArtifacts = true;
+            artifactDropzoneUpdater?.();
+
+            const dropzone = document.getElementById('artifactDropzone');
+            const artifactsList = document.getElementById('artifactsList');
+            const statusLabel = dropzone?.querySelector('#artifactDropzoneLabel');
+            const originalLabel = statusLabel?.textContent;
+
+            try {
+                statusLabel.textContent = `アップロード中 (${fileList.length} ファイル)...`;
+                const response = await fetch('/api/artifacts/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                const { results = [] } = result;
+                if (!response.ok) throw new Error('アップロードに失敗しました');
+
+                const errors = results.filter(item => item.error);
+                if (errors.length) {
+                    console.warn('一部のファイルが失敗:', errors);
+                    alert(`一部のファイルでエラーが発生しました。\n${errors.map(err => `${err.originalName}: ${err.error}`).join('\n')}`);
+                } else {
+                    alert('ファイルをアップロードしました');
+                }
+
+                await Promise.all([
+                    loadArtifacts(),
+                    fetchSystemPrompt()
+                ]);
+            } catch (error) {
+                console.error('uploadArtifacts error:', error);
+                alert(error.message || 'アップロードに失敗しました');
+                if (artifactsList) {
+                    artifactsList.innerHTML = '<div style="padding: 20px; text-align: center; color: #ff6666;">アップロードエラーが発生しました</div>';
+                }
+            } finally {
+                isUploadingArtifacts = false;
+                if (statusLabel) statusLabel.textContent = originalLabel;
+                artifactDropzoneUpdater?.();
+            }
+        }
 
         function showUsageLimitPopup() {
             alert('そろそろ24hの無料利用枠を超えるので、しばらく待ってね！');
@@ -958,7 +1106,10 @@
             await loadTokenUsage();
             await loadArtifacts();
             setInterval(loadTokenUsage, 30000);
+
+            artifactDropzoneUpdater = initArtifactDropzone();
         }
+
 
         async function loadModels() {
             try {
@@ -1123,11 +1274,12 @@
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
                 await loadThreads();
                 await loadArtifacts();
+                artifactDropzoneUpdater?.(); // ドロップゾーンの表示状態を更新
             } catch (error) {
                 console.error('Failed to load thread:', error);
             }
         }
-        
+
         function formatMarkdownText(text) {
             if (!text) return '';
 
@@ -1204,6 +1356,7 @@
                 document.getElementById('chatArea').classList.add('hidden');
                 await loadThreads();
                 await loadArtifacts();
+                artifactDropzoneUpdater?.(); // ドロップゾーンの表示状態を更新
             } catch (error) {
                 console.error('Failed to delete thread:', error);
                 alert('スレッドの削除に失敗しました');
@@ -1309,6 +1462,7 @@
                 await loadThread(currentThreadId);
                 await loadThreads();
                 await loadArtifacts();
+                artifactDropzoneUpdater?.(); // ドロップゾーンの表示状態を更新
             } catch (error) {
                 console.error('Failed to send message:', error);
                 alert(`エラー: ${error.message}`);
@@ -1441,6 +1595,7 @@
 
                 closeModal('createArtifactModal');
                 await loadArtifacts();
+                artifactDropzoneUpdater?.(); // ドロップゾーンの表示状態を更新
                 await fetchSystemPrompt(); 
                 alert('アーティファクトを作成しました');
             } catch (error) {
@@ -1484,6 +1639,7 @@
 
                 closeModal('editArtifactModal');
                 await loadArtifacts();
+                artifactDropzoneUpdater?.(); // ドロップゾーンの表示状態を更新
                 await fetchSystemPrompt();
                 alert('アーティファクトを更新しました');
             } catch (error) {
@@ -1500,6 +1656,7 @@
                 if (!response.ok) throw new Error('削除に失敗しました');
                 
                 await loadArtifacts();
+                artifactDropzoneUpdater?.(); // ドロップゾーンの表示状態を更新
                 await fetchSystemPrompt();
                 alert('アーティファクトを削除しました');
             } catch (error) {

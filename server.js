@@ -1,6 +1,7 @@
 // server.js
 import 'dotenv/config';
 import express from 'express';
+import multer from 'multer';
 import { OpenAI } from 'openai';
 import fs from 'fs/promises';
 import path from 'path';
@@ -12,6 +13,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // 静的ファイルの配信
 app.use(express.static('public'));
@@ -21,6 +23,14 @@ if (!process.env.OPENAI_API_KEY) {
   console.error('ERROR: OPENAI_API_KEY is not set in .env file');
   process.exit(1);
 }
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 例: 50MB
+    files: 20
+  }
+});
 
 // デフォルトモデルの設定
 const DEFAULT_MODEL = process.env.ORCHESTRATOR_MODEL || 'gpt-5-codex';
@@ -381,6 +391,95 @@ async function updateThreadAfterArtifactChange(threadId) {
   await refreshThreadDerivedState(thread, { persist: true });
 }
 
+async function ensureArtifactDir(artifactId) {
+  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+  await fs.mkdir(artifactDir, { recursive: true });
+  return artifactDir;
+}
+
+function buildVersionedFilename(filename, version) {
+  const { name, ext } = path.parse(filename);
+  return `${name}_v${version}${ext}`;
+}
+
+async function writeArtifactFile(filePath, content) {
+  const data = Buffer.isBuffer(content) ? content : Buffer.from(content);
+  await fs.writeFile(filePath, data);
+}
+
+async function createArtifactRecord({ filename, content, metadata = {}, threadId = null }) {
+  const artifactId = generateId();
+  const version = 1;
+  const timestamp = new Date().toISOString();
+
+  const artifactDir = await ensureArtifactDir(artifactId);
+  const versionedFilename = buildVersionedFilename(filename, version);
+  const filePath = path.join(artifactDir, versionedFilename);
+  await writeArtifactFile(filePath, content);
+
+  const artifactMetadata = {
+    id: artifactId,
+    filename,
+    threadId,
+    currentVersion: version,
+    versions: [{
+      version,
+      filename: versionedFilename,
+      createdAt: timestamp,
+      metadata
+    }],
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+
+  const metadataPath = path.join(artifactDir, 'metadata.json');
+  await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
+  await updateThreadAfterArtifactChange(threadId);
+
+  return {
+    artifactId,
+    version,
+    filename: versionedFilename,
+    threadId,
+    path: `/api/artifacts/${artifactId}/v${version}`
+  };
+}
+
+async function appendArtifactVersion({ artifactId, content, metadata = {} }) {
+  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+  const metadataPath = path.join(artifactDir, 'metadata.json');
+
+  const metadataContent = await fs.readFile(metadataPath, 'utf-8');
+  const artifactMetadata = JSON.parse(metadataContent);
+
+  const newVersion = artifactMetadata.currentVersion + 1;
+  const timestamp = new Date().toISOString();
+  const versionedFilename = buildVersionedFilename(artifactMetadata.filename, newVersion);
+  const filePath = path.join(artifactDir, versionedFilename);
+
+  await writeArtifactFile(filePath, content);
+
+  artifactMetadata.currentVersion = newVersion;
+  artifactMetadata.versions.push({
+    version: newVersion,
+    filename: versionedFilename,
+    createdAt: timestamp,
+    metadata
+  });
+  artifactMetadata.updatedAt = timestamp;
+
+  await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
+  await updateThreadAfterArtifactChange(artifactMetadata.threadId);
+
+  return {
+    artifactId,
+    version: newVersion,
+    filename: versionedFilename,
+    threadId: artifactMetadata.threadId,
+    path: `/api/artifacts/${artifactId}/v${newVersion}`
+  };
+}
+
 // モデルのバリデーション
 function validateModel(model) {
   if (!model) {
@@ -735,6 +834,30 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
             },
             required: ["artifact_id", "content"]
           }
+        },
+        {
+          type: "function",
+          name: "read_artifact",
+          description: "Read the contents of an existing artifact so you can inspect or quote it in your response.",
+          parameters: {
+            type: "object",
+            properties: {
+              artifact_id: {
+                type: "string",
+                description: "The ID of the artifact to read"
+              },
+              version: {
+                type: "integer",
+                description: "Specific version to read. Defaults to the latest version."
+              },
+              encoding: {
+                type: "string",
+                enum: ["utf-8", "base64"],
+                description: "Encoding for the returned content. Defaults to utf-8; use base64 for binary files."
+              }
+            },
+            required: ["artifact_id"]
+          }
         }
       ];
 
@@ -956,6 +1079,72 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
                 }
               }
               
+              // Artifact読み取りツール
+              if (item.name === 'read_artifact') {
+                try {
+                  console.log('  📖 Reading artifact...');
+                  const artifactId = toolInput.artifact_id;
+                  const requestedVersion = typeof toolInput.version === 'number' ? toolInput.version : null;
+                  const encoding = toolInput.encoding === 'base64' ? 'base64' : 'utf-8';
+
+                  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+                  const metadataPath = path.join(artifactDir, 'metadata.json');
+                  const metadataContent = await fs.readFile(metadataPath, 'utf-8');
+                  const artifactMetadata = JSON.parse(metadataContent);
+
+                  const versionData = requestedVersion
+                    ? artifactMetadata.versions.find(v => v.version === requestedVersion)
+                    : artifactMetadata.versions.at(-1);
+
+                  if (!versionData) {
+                    throw new Error(
+                      requestedVersion
+                        ? `Artifact version ${requestedVersion} not found`
+                        : 'No versions found for artifact'
+                    );
+                  }
+
+                  const filePath = path.join(artifactDir, versionData.filename);
+                  const fileBuffer = await fs.readFile(filePath);
+                  const fileContent = encoding === 'base64'
+                    ? fileBuffer.toString('base64')
+                    : fileBuffer.toString('utf-8');
+
+                  toolResult = {
+                    success: true,
+                    artifactId,
+                    filename: artifactMetadata.filename,
+                    version: versionData.version,
+                    encoding,
+                    content: fileContent,
+                    metadata: versionData.metadata ?? {},
+                    message: `Successfully read artifact ${artifactMetadata.filename} (v${versionData.version})`
+                  };
+
+                  allToolCalls.push({
+                    type: 'read_artifact',
+                    name: item.name,
+                    input: toolInput,
+                    result: toolResult
+                  });
+
+                  console.log(`  ✅ Artifact read: ${artifactId} (v${versionData.version})`);
+                } catch (error) {
+                  console.error('  ❌ Failed to read artifact:', error);
+                  toolResult = {
+                    success: false,
+                    error: error.message
+                  };
+
+                  allToolCalls.push({
+                    type: 'read_artifact',
+                    name: item.name,
+                    input: toolInput,
+                    error: error.message
+                  });
+                }
+              }
+
               // ツール結果を会話履歴に追加
               if (toolResult) {
                 toolCallsInThisIteration.push({
@@ -1112,42 +1301,13 @@ app.get('/api/threads/:threadId/messages', async (req, res) => {
 app.post('/api/artifacts', async (req, res) => {
   try {
     const { filename, content, metadata, threadId } = req.body;
-    const artifactId = generateId();
-    const version = 1;
-    
-    const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-    await fs.mkdir(artifactDir, { recursive: true });
-    
-    const versionedFilename = `${filename}_v${version}`;
-    const filePath = path.join(artifactDir, versionedFilename);
-    await fs.writeFile(filePath, content, 'utf-8');
-    
-    const artifactMetadata = {
-      id: artifactId,
+    const result = await createArtifactRecord({
       filename,
-      threadId: threadId || null,
-      currentVersion: version,
-      versions: [{
-        version,
-        filename: versionedFilename,
-        createdAt: new Date().toISOString(),
-        metadata: metadata || {}
-      }],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    
-    const metadataPath = path.join(artifactDir, 'metadata.json');
-    await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
-    await updateThreadAfterArtifactChange(artifactMetadata.threadId);
-    
-    res.status(201).json({
-      artifactId,
-      version,
-      filename: versionedFilename,
-      threadId: artifactMetadata.threadId,
-      path: `/api/artifacts/${artifactId}/v${version}`
+      content,
+      metadata: metadata || {},
+      threadId: threadId || null
     });
+    res.status(201).json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1214,41 +1374,22 @@ app.get('/api/artifacts/:artifactId/v:version', async (req, res) => {
 // アーティファクト編集(新バージョン作成)
 app.put('/api/artifacts/:artifactId', async (req, res) => {
   try {
-    const { artifactId } = req.params;
-    const { content, metadata } = req.body;
-    
-    const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-    const metadataPath = path.join(artifactDir, 'metadata.json');
-    
-    const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-    const artifactMetadata = JSON.parse(metadataContent);
-    
-    const newVersion = artifactMetadata.currentVersion + 1;
-    const versionedFilename = `${artifactMetadata.filename}_v${newVersion}`;
-    const filePath = path.join(artifactDir, versionedFilename);
-    
-    await fs.writeFile(filePath, content, 'utf-8');
-    
-    artifactMetadata.currentVersion = newVersion;
-    artifactMetadata.versions.push({
-      version: newVersion,
-      filename: versionedFilename,
-      createdAt: new Date().toISOString(),
+    const { content, metadata } = req.body ?? {};
+
+    if (typeof content === 'undefined') {
+      return res.status(400).json({ error: 'content is required' });
+    }
+
+    const result = await appendArtifactVersion({
+      artifactId: req.params.artifactId,
+      content,
       metadata: metadata || {}
     });
-    artifactMetadata.updatedAt = new Date().toISOString();
-    
-    await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
-    await updateThreadAfterArtifactChange(artifactMetadata.threadId);
-    
-    res.json({
-      artifactId,
-      version: newVersion,
-      filename: versionedFilename,
-      path: `/api/artifacts/${artifactId}/v${newVersion}`
-    });
+
+    res.json(result);
   } catch (error) {
-    res.status(404).json({ error: 'Artifact not found' });
+    console.error('[appendArtifactVersion] failed:', error);
+    res.status(404).json({ error: 'Artifact not found', details: error.message });
   }
 });
 
@@ -1302,6 +1443,42 @@ app.get('/api/artifacts', async (req, res) => {
     }
     
     res.json({ artifacts });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 複数ファイルアップロード
+app.post('/api/artifacts/upload', upload.array('files'), async (req, res) => {
+  try {
+    if (!req.files?.length) {
+      return res.status(400).json({ error: 'ファイルが添付されていません。' });
+    }
+
+    const threadId = req.body.threadId || null;
+    const metadataPayload = req.body.metadata ? JSON.parse(req.body.metadata) : {};
+
+    const results = [];
+    for (const file of req.files) {
+      try {
+        const fileMetadata = metadataPayload[file.originalname] || {};
+        const record = await createArtifactRecord({
+          filename: file.originalname,
+          content: file.buffer,
+          metadata: fileMetadata,
+          threadId
+        });
+        results.push({ ...record, originalName: file.originalname });
+      } catch (fileError) {
+        results.push({
+          originalName: file.originalname,
+          error: fileError.message
+        });
+      }
+    }
+
+    const hasError = results.some(result => result.error);
+    res.status(hasError ? 207 : 201).json({ results });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
