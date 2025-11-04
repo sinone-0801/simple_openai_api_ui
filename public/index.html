@@ -1062,7 +1062,7 @@
 
             try {
                 statusLabel.textContent = `アップロード中 (${fileList.length} ファイル)...`;
-                const response = await fetch('/api/artifacts/upload', {
+                const response = await fetch('./api/artifacts/upload', {
                     method: 'POST',
                     body: formData
                 });
@@ -1113,7 +1113,7 @@
 
         async function loadModels() {
             try {
-                const response = await fetch('/api/models');
+                const response = await fetch('./api/models');
                 const data = await response.json();
                 availableModels = data.availableModels;
                 
@@ -1142,7 +1142,7 @@
 
         async function loadTokenUsage() {
             try {
-                const response = await fetch('/api/token-usage/stats');
+                const response = await fetch('./api/token-usage/stats');
                 const data = await response.json();
                 
                 const highCostUsage = data.last24Hours.highCost.usage;
@@ -1190,7 +1190,7 @@
             const model = document.getElementById('modelSelect').value;
             
             try {
-                await fetch(`/api/threads/${currentThreadId}/model`, {
+                await fetch(`./api/threads/${currentThreadId}/model`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ model })
@@ -1204,7 +1204,7 @@
 
         async function loadThreads() {
             try {
-                const response = await fetch('/api/threads');
+                const response = await fetch('./api/threads');
                 const data = await response.json();
                 const threadsList = document.getElementById('threadsList');
                 
@@ -1229,7 +1229,7 @@
 
         async function loadThread(threadId) {
             try {
-                const response = await fetch(`/api/threads/${threadId}`);
+                const response = await fetch(`./api/threads/${threadId}`);
                 const thread = await response.json();
                 
                 currentThreadId = threadId;
@@ -1326,7 +1326,7 @@
             const systemPrompt = document.getElementById('threadSystemPrompt').value;
             
             try {
-                const response = await fetch('/api/threads', {
+                const response = await fetch('./api/threads', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title, model, systemPrompt })
@@ -1346,7 +1346,7 @@
             if (!currentThreadId || !confirm('このスレッドを削除してもよろしいですか?')) return;
             
             try {
-                await fetch(`/api/threads/${currentThreadId}`, { method: 'DELETE' });
+                await fetch(`./api/threads/${currentThreadId}`, { method: 'DELETE' });
                 closeModal('editPromptModal');
                 currentThreadId = null;
                 document.getElementById('chatTitle').textContent = 'スレッドを選択してください';
@@ -1394,7 +1394,7 @@
         async function fetchSystemPrompt() {
             if (!currentThreadId) return;
             try {
-                const response = await fetch(`/api/threads/${currentThreadId}/system-prompt`);
+                const response = await fetch(`./api/threads/${currentThreadId}/system-prompt`);
                 const data = await response.json();
                 applySystemPromptData(data);
             } catch (error) {
@@ -1406,7 +1406,7 @@
             if (!currentThreadId) return;
             try {
                 const basePrompt = document.getElementById('systemPromptUserInput').value;
-                const response = await fetch(`/api/threads/${currentThreadId}/system-prompt`, {
+                const response = await fetch(`./api/threads/${currentThreadId}/system-prompt`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ systemPrompt: basePrompt })
@@ -1435,7 +1435,7 @@
             input.disabled = true;
 
             try {
-                const response = await fetch(`/api/threads/${currentThreadId}/messages`, {
+                const response = await fetch(`./api/threads/${currentThreadId}/messages`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content })
@@ -1477,7 +1477,7 @@
 
         async function loadArtifacts() {
             try {
-                const url = currentThreadId ? `/api/artifacts?threadId=${currentThreadId}` : '/api/artifacts';
+                const url = currentThreadId ? `./api/artifacts?threadId=${currentThreadId}` : './api/artifacts';
                 const response = await fetch(url);
                 const data = await response.json();
                 const artifactsList = document.getElementById('artifactsList');
@@ -1509,7 +1509,7 @@
 
         async function viewArtifact(artifactId) {
             try {
-                const response = await fetch(`/api/artifacts/${artifactId}`);
+                const response = await fetch(`./api/artifacts/${artifactId}`);
                 const artifact = await response.json();
                 
                 currentArtifact = artifact;
@@ -1524,7 +1524,7 @@
 
         async function downloadArtifact(artifactId) {
             try {
-                const response = await fetch(`/api/artifacts/${artifactId}`);
+                const response = await fetch(`./api/artifacts/${artifactId}`);
                 const artifact = await response.json();
                 
                 const blob = new Blob([artifact.content], { type: 'text/plain' });
@@ -1577,7 +1577,7 @@
             const description = document.getElementById('artifactDescription').value;
 
             try {
-                const response = await fetch('/api/artifacts', {
+                const response = await fetch('./api/artifacts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1623,7 +1623,7 @@
             const description = document.getElementById('editArtifactDescription').value;
 
             try {
-                const response = await fetch(`/api/artifacts/${currentArtifact.id}`, {
+                const response = await fetch(`./api/artifacts/${currentArtifact.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1652,7 +1652,7 @@
             if (!confirm('このアーティファクトを削除してもよろしいですか？')) return;
             
             try {
-                const response = await fetch(`/api/artifacts/${artifactId}`, { method: 'DELETE' });
+                const response = await fetch(`./api/artifacts/${artifactId}`, { method: 'DELETE' });
                 if (!response.ok) throw new Error('削除に失敗しました');
                 
                 await loadArtifacts();

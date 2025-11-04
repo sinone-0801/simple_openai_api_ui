@@ -31,6 +31,5 @@ npm start
 ```
 
 ## 3. next-step
-    4. nginxで "location /xxxxx/" を指定した際の挙動の安定化 (特に/api/が、/xxxxx/api/に飛ばない件)
     5. システムプロンプト編集と同様に、応答スキーマの設定をUIから可能に
     6. MCPサーバーの追加
