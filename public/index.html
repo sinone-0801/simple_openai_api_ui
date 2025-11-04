@@ -26,6 +26,7 @@
             height: 100%;
             width: 100%;
             overflow: hidden;
+            position: relative;
         }
 
         .sidebar {
@@ -34,12 +35,27 @@
             border-right: 1px solid #3a3a3a;
             display: flex;
             flex-direction: column;
+            transition: transform 0.3s ease;
+            z-index: 15;
+        }
+
+        .sidebar-close-btn {
+            display: none;
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: transparent;
+            border: none;
+            color: #e0e0e0;
+            font-size: 20px;
+            cursor: pointer;
         }
 
         .sidebar-header {
             padding: 20px;
             border-bottom: 1px solid #3a3a3a;
             flex-shrink: 0;
+            position: relative;
         }
 
         .sidebar-header h1 {
@@ -162,6 +178,7 @@
             flex: 1;
             background: #1a1a1a;
             overflow: hidden;
+            transition: filter 0.3s ease;
         }
 
         .chat-header {
@@ -178,6 +195,33 @@
             font-size: 20px;
             font-weight: 600;
             margin-bottom: 10px;
+        }
+
+        .mobile-toolbar {
+            display: none;
+            gap: 10px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .mobile-toggle-btn {
+            flex: 1 1 auto;
+            min-width: 120px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #333;
+            color: #e0e0e0;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .mobile-toggle-btn:active {
+            background: #3f3f3f;
         }
 
         .chat-header::-webkit-scrollbar {
@@ -479,6 +523,20 @@
             border-left: 1px solid #3a3a3a;
             display: flex;
             flex-direction: column;
+            transition: transform 0.3s ease;
+            z-index: 15;
+        }
+
+        .artifacts-close-btn {
+            display: none;
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: transparent;
+            border: none;
+            color: #e0e0e0;
+            font-size: 20px;
+            cursor: pointer;
         }
 
         .artifact-dropzone {
@@ -508,6 +566,7 @@
             padding: 20px;
             border-bottom: 1px solid #3a3a3a;
             flex-shrink: 0;
+            position: relative;
         }
 
         .artifacts-header h3 {
@@ -744,13 +803,146 @@
             white-space: pre-wrap;
             margin: 8px 0;
         }
+
+        .mobile-overlay {
+            display: none;
+        }
+
+        @media (max-width: 1024px) {
+            body {
+                flex-direction: column;
+                overflow: hidden;
+                height: 100vh;
+            }
+
+            .container {
+                flex-direction: column;
+            }
+
+            .sidebar,
+            .artifacts-panel {
+                position: fixed;
+                top: 0;
+                bottom: 0;
+                width: min(80vw, 320px);
+                max-width: 100%;
+                height: 100%;
+                overflow-y: auto;
+                box-shadow: 0 0 20px rgba(0, 0, 0, 0.4);
+                background: #222;
+            }
+
+            .sidebar {
+                left: 0;
+                transform: translateX(-100%);
+            }
+
+            .artifacts-panel {
+                right: 0;
+                transform: translateX(100%);
+            }
+
+            body.show-left-sidebar .sidebar {
+                transform: translateX(0);
+            }
+
+            body.show-right-sidebar .artifacts-panel {
+                transform: translateX(0);
+            }
+
+            body.sidebar-open {
+                overflow: hidden;
+            }
+
+            .mobile-overlay {
+                display: block;
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.5);
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.3s ease;
+                z-index: 10;
+            }
+
+            body.sidebar-open .mobile-overlay {
+                opacity: 1;
+                pointer-events: auto;
+            }
+
+            .sidebar-close-btn,
+            .artifacts-close-btn {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 32px;
+                height: 32px;
+                border-radius: 50%;
+                background: rgba(0, 0, 0, 0.4);
+            }
+
+            .mobile-toolbar {
+                display: flex;
+            }
+
+            .chat-header {
+                max-height: unset;
+                overflow: visible;
+            }
+
+            .main-content {
+                height: 100vh;
+            }
+
+            body.sidebar-open .main-content {
+                filter: blur(1px);
+            }
+
+            .messages-container {
+                padding: 16px;
+            }
+
+            .message.user .message-content,
+            .message.assistant .message-content {
+                max-width: 100%;
+            }
+
+            .input-form {
+                flex-direction: column;
+            }
+
+            .send-btn {
+                width: 100%;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .chat-header h2 {
+                font-size: 18px;
+            }
+
+            .message-content {
+                font-size: 14px;
+            }
+
+            .mobile-toggle-btn {
+                font-size: 13px;
+            }
+
+            .system-prompt-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 6px;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <!-- 左サイドバー：スレッド一覧 -->
-        <div class="sidebar">
+        <div class="sidebar" id="leftSidebar">
             <div class="sidebar-header">
+                <button class="sidebar-close-btn" onclick="closeSidebars()" aria-label="サイドバーを閉じる">✕</button>
                 <h1>OpenAI API UI</h1>
                 <button class="new-thread-btn" onclick="showNewThreadModal()">+ 新規スレッド</button>
                 
@@ -787,6 +979,16 @@
         <!-- メインコンテンツ：チャット -->
         <div class="main-content">
             <div class="chat-header">
+                <div class="mobile-toolbar">
+                    <button class="mobile-toggle-btn" onclick="toggleLeftSidebar()" aria-label="スレッドサイドバーを開く">
+                        <span>☰</span>
+                        <span>スレッド</span>
+                    </button>
+                    <button class="mobile-toggle-btn" onclick="toggleRightSidebar()" aria-label="アーティファクトサイドバーを開く">
+                        <span>📁</span>
+                        <span>アーティファクト</span>
+                    </button>
+                </div>
                 <h2 id="chatTitle">スレッドを選択してください</h2>
                 <!-- モデル管理カード -->
                 <div class="model-selector" id="modelSelector" style="display: none;">
@@ -843,9 +1045,12 @@
             </div>
         </div>
 
+        <div class="mobile-overlay" id="mobileOverlay" onclick="closeSidebars()"></div>
+
         <!-- 右サイドバー：アーティファクト -->
-        <div class="artifacts-panel">
+        <div class="artifacts-panel" id="rightSidebar">
             <div class="artifacts-header">
+                <button class="artifacts-close-btn" onclick="closeSidebars()" aria-label="サイドバーを閉じる">✕</button>
                 <h3>アーティファクト</h3>
                 <button class="create-artifact-btn" onclick="showCreateArtifactModal()" id="createArtifactBtn" disabled>+ 新規作成</button>
                 <div id="artifactDropzone" class="artifact-dropzone">
@@ -1156,6 +1361,8 @@
             setInterval(loadTokenUsage, 30000);
 
             artifactDropzoneUpdater = initArtifactDropzone();
+            handleResponsiveSidebarState();
+            window.addEventListener('resize', handleResponsiveSidebarState);
         }
 
 
@@ -1323,6 +1530,10 @@
                 await loadThreads();
                 await loadArtifacts();
                 artifactDropzoneUpdater?.(); // ドロップゾーンの表示状態を更新
+
+                if (window.innerWidth <= 1024) {
+                    closeSidebars();
+                }
             } catch (error) {
                 console.error('Failed to load thread:', error);
             }
@@ -1765,6 +1976,38 @@
 
         function formatDateTime(dateString) {
             return new Date(dateString).toLocaleString('ja-JP');
+        }
+
+        function toggleLeftSidebar() {
+            const isOpen = document.body.classList.toggle('show-left-sidebar');
+            if (isOpen) {
+                document.body.classList.remove('show-right-sidebar');
+            }
+            updateSidebarOverlayState();
+        }
+
+        function toggleRightSidebar() {
+            const isOpen = document.body.classList.toggle('show-right-sidebar');
+            if (isOpen) {
+                document.body.classList.remove('show-left-sidebar');
+            }
+            updateSidebarOverlayState();
+        }
+
+        function closeSidebars() {
+            document.body.classList.remove('show-left-sidebar', 'show-right-sidebar');
+            updateSidebarOverlayState();
+        }
+
+        function updateSidebarOverlayState() {
+            const hasOpen = document.body.classList.contains('show-left-sidebar') || document.body.classList.contains('show-right-sidebar');
+            document.body.classList.toggle('sidebar-open', hasOpen);
+        }
+
+        function handleResponsiveSidebarState() {
+            if (window.innerWidth > 1024) {
+                document.body.classList.remove('show-left-sidebar', 'show-right-sidebar', 'sidebar-open');
+            }
         }
 
         init();
