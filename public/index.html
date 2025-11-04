@@ -849,7 +849,7 @@
                 <h3>アーティファクト</h3>
                 <button class="create-artifact-btn" onclick="showCreateArtifactModal()" id="createArtifactBtn" disabled>+ 新規作成</button>
                 <div id="artifactDropzone" class="artifact-dropzone">
-                    <span id="artifactDropzoneLabel">ファイルをここにドロップ（またはクリック）</span>
+                    <span id="artifactDropzoneLabel">テキストファイル（UTF-8）のみ対応: ファイルをここにドロップ（またはクリック）</span>
                     <input id="artifactFileInput" type="file" multiple hidden />
                 </div>
             </div>
@@ -922,7 +922,7 @@
             <div class="modal-header">アーティファクトを作成</div>
             <form onsubmit="createArtifact(event)">
                 <div class="form-group">
-                    <label class="form-label">ファイル名</label>
+                    <label class="form-label">ファイル名（テキストファイルのみ）</label>
                     <input type="text" class="form-input" id="artifactFilename" placeholder="example.js" required>
                 </div>
                 <div class="form-group">
@@ -966,6 +966,15 @@
     </div>
 
     <script>
+        const ALLOWED_TEXT_EXTENSIONS = new Set([
+            '.txt', '.md', '.markdown', '.json', '.json5', '.js', '.mjs', '.cjs', '.ts', '.tsx',
+            '.jsx', '.css', '.scss', '.sass', '.less', '.html', '.htm', '.xml', '.svg', '.yml', '.yaml',
+            '.csv', '.tsv', '.log', '.ini', '.cfg', '.conf', '.env', '.py', '.rb', '.go', '.java', '.kt',
+            '.swift', '.c', '.h', '.hpp', '.cpp', '.cc', '.cs', '.rs', '.php', '.sql', '.sh', '.bash', '.zsh', '.ps1'
+        ]);
+        const DROPZONE_TEXT_DEFAULT = 'テキストファイル（UTF-8）のみ対応: ファイルをここにドロップ（またはクリック）';
+        const ALLOWED_TEXT_EXTENSIONS_MESSAGE = Array.from(ALLOWED_TEXT_EXTENSIONS).sort().join(', ');
+
         let currentThreadId = null;
         let availableModels = [];
         let currentArtifact = null;
@@ -976,6 +985,31 @@
         };
         let isUploadingArtifacts = false;
         let artifactDropzoneUpdater = null;
+
+        function getFileExtension(filename = '') {
+            const lastDot = filename.lastIndexOf('.');
+            if (lastDot === -1) return '';
+            return filename.slice(lastDot).toLowerCase();
+        }
+
+        function isAllowedTextExtension(filename = '') {
+            const ext = getFileExtension(filename);
+            if (!ext) return false;
+            return ALLOWED_TEXT_EXTENSIONS.has(ext);
+        }
+
+        function splitFilesByExtension(files = []) {
+            const allowed = [];
+            const rejected = [];
+            files.forEach((file) => {
+                if (isAllowedTextExtension(file.name)) {
+                    allowed.push(file);
+                } else {
+                    rejected.push(file);
+                }
+            });
+            return { allowed, rejected };
+        }
 
         function initArtifactDropzone() {
             const dropzone = document.getElementById('artifactDropzone');
@@ -988,7 +1022,7 @@
                 dropzone.querySelector('#artifactDropzoneLabel').textContent =
                     !currentThreadId ? 'スレッドを選択してください' :
                     isUploadingArtifacts ? 'アップロード中...' :
-                    'ファイルをここにドロップ（またはクリック）';
+                    DROPZONE_TEXT_DEFAULT;
             };
 
             const highlight = (evt) => {
@@ -1040,11 +1074,25 @@
         async function uploadArtifacts(fileList) {
             if (!currentThreadId || isUploadingArtifacts) return;
 
+            const filesArray = Array.isArray(fileList) ? fileList : Array.from(fileList || []);
+            if (!filesArray.length) return;
+
+            const { allowed, rejected } = splitFilesByExtension(filesArray);
+
+            if (rejected.length) {
+                const rejectedNames = rejected.map(file => `・${file.name}`).join('\n');
+                alert(`テキスト以外の拡張子、または拡張子が未設定のファイルはアップロードできません。\nスキップされたファイル:\n${rejectedNames}\n\n対応している拡張子:\n${ALLOWED_TEXT_EXTENSIONS_MESSAGE}`);
+            }
+
+            if (!allowed.length) {
+                return;
+            }
+
             const formData = new FormData();
             formData.append('threadId', currentThreadId);
 
             const metadataMap = {};
-            Array.from(fileList).forEach((file) => {
+            allowed.forEach((file) => {
                 formData.append('files', file);
                 metadataMap[file.name] = {
                     description: `Uploaded via UI at ${new Date().toISOString()}`
@@ -1061,7 +1109,7 @@
             const originalLabel = statusLabel?.textContent;
 
             try {
-                statusLabel.textContent = `アップロード中 (${fileList.length} ファイル)...`;
+                statusLabel.textContent = `アップロード中 (${allowed.length} ファイル)...`;
                 const response = await fetch('./api/artifacts/upload', {
                     method: 'POST',
                     body: formData
@@ -1069,7 +1117,7 @@
 
                 const result = await response.json();
                 const { results = [] } = result;
-                if (!response.ok) throw new Error('アップロードに失敗しました');
+                if (!response.ok && response.status !== 207) throw new Error('アップロードに失敗しました');
 
                 const errors = results.filter(item => item.error);
                 if (errors.length) {
@@ -1572,16 +1620,34 @@
             event.preventDefault();
             if (!currentThreadId) return;
 
-            const filename = document.getElementById('artifactFilename').value;
+            const filenameInput = document.getElementById('artifactFilename');
+            const rawFilename = filenameInput.value.trim();
             const content = document.getElementById('artifactContentInput').value;
             const description = document.getElementById('artifactDescription').value;
+
+            if (!rawFilename) {
+                alert('ファイル名を入力してください。');
+                filenameInput.focus();
+                return;
+            }
+
+            if (!isAllowedTextExtension(rawFilename)) {
+                const ext = getFileExtension(rawFilename);
+                if (!ext) {
+                    alert(`テキストファイルの拡張子を付けてください。\n対応している拡張子: ${ALLOWED_TEXT_EXTENSIONS_MESSAGE}`);
+                } else {
+                    alert(`拡張子「${ext}」は現在サポートされていません。\n対応している拡張子: ${ALLOWED_TEXT_EXTENSIONS_MESSAGE}`);
+                }
+                filenameInput.focus();
+                return;
+            }
 
             try {
                 const response = await fetch('./api/artifacts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        filename,
+                        filename: rawFilename,
                         content,
                         threadId: currentThreadId,
                         metadata: { description: description || '' }

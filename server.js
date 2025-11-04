@@ -21,6 +21,7 @@ app.use(express.static('public'));
 // 環境変数の確認
 if (!process.env.OPENAI_API_KEY) {
   console.error('ERROR: OPENAI_API_KEY is not set in .env file');
+  console.error('Please set OPENAI_API_KEY before starting the server.');
   process.exit(1);
 }
 
@@ -127,6 +128,9 @@ const TOKEN_LOG_FILE = path.join(DATA_DIR, 'token_usage.csv');
 
 await fs.mkdir(DATA_DIR, { recursive: true });
 await fs.mkdir(ARTIFACTS_DIR, { recursive: true });
+
+const INVALID_FILENAME_CHARS_REGEX = /[\\/:*?"<>|]/g;
+const DEFAULT_ARTIFACT_BASENAME = 'artifact';
 
 // CSVログファイルの初期化
 async function initTokenLog() {
@@ -325,6 +329,26 @@ async function collectThreadArtifactSummaries(threadId) {
   return summaries.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 
+function sanitizeFilename(filename) {
+  if (typeof filename !== 'string') {
+    return DEFAULT_ARTIFACT_BASENAME;
+  }
+  const trimmed = filename.trim();
+  if (!trimmed) {
+    return DEFAULT_ARTIFACT_BASENAME;
+  }
+  const base = path.basename(trimmed);
+  const sanitized = base.replace(INVALID_FILENAME_CHARS_REGEX, '_');
+  return sanitized || DEFAULT_ARTIFACT_BASENAME;
+}
+
+function decodeMulterFilename(name) {
+  if (typeof name !== 'string') {
+    return DEFAULT_ARTIFACT_BASENAME;
+  }
+  return Buffer.from(name, 'latin1').toString('utf8');
+}
+
 function composeSystemPrompt(userPrompt = DEFAULT_SYSTEM_PROMPT, artifactSummaries = []) {
   const sanitized = userPrompt.trim() || DEFAULT_SYSTEM_PROMPT;
   const inventoryJson = JSON.stringify(
@@ -400,8 +424,10 @@ async function ensureArtifactDir(artifactId) {
 }
 
 function buildVersionedFilename(filename, version) {
-  const { name, ext } = path.parse(filename);
-  return `${name}_v${version}${ext}`;
+  const parsed = path.parse(filename);
+  const safeName = parsed.name || DEFAULT_ARTIFACT_BASENAME;
+  const safeExt = parsed.ext || '';
+  return `${safeName}_v${version}${safeExt}`;
 }
 
 async function writeArtifactFile(filePath, content) {
@@ -413,15 +439,16 @@ async function createArtifactRecord({ filename, content, metadata = {}, threadId
   const artifactId = generateId();
   const version = 1;
   const timestamp = new Date().toISOString();
+  const safeFilename = sanitizeFilename(filename);
 
   const artifactDir = await ensureArtifactDir(artifactId);
-  const versionedFilename = buildVersionedFilename(filename, version);
+  const versionedFilename = buildVersionedFilename(safeFilename, version);
   const filePath = path.join(artifactDir, versionedFilename);
   await writeArtifactFile(filePath, content);
 
   const artifactMetadata = {
     id: artifactId,
-    filename,
+    filename: safeFilename,
     threadId,
     currentVersion: version,
     versions: [{
@@ -442,6 +469,7 @@ async function createArtifactRecord({ filename, content, metadata = {}, threadId
     artifactId,
     version,
     filename: versionedFilename,
+    displayFilename: safeFilename,
     threadId,
     path: `/api/artifacts/${artifactId}/v${version}`
   };
@@ -477,6 +505,7 @@ async function appendArtifactVersion({ artifactId, content, metadata = {} }) {
     artifactId,
     version: newVersion,
     filename: versionedFilename,
+    displayFilename: artifactMetadata.filename,
     threadId: artifactMetadata.threadId,
     path: `/api/artifacts/${artifactId}/v${newVersion}`
   };
@@ -960,45 +989,62 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
               if (item.name === 'create_artifact') {
                 try {
                   console.log('  📝 Creating artifact...');
-                  const artifactId = generateId();
-                  const version = 1;
-                  
-                  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-                  await fs.mkdir(artifactDir, { recursive: true });
-                  
-                  const versionedFilename = `${toolInput.filename}_v${version}`;
-                  const filePath = path.join(artifactDir, versionedFilename);
-                  await fs.writeFile(filePath, toolInput.content, 'utf-8');
-                  
-                  const artifactMetadata = {
-                    id: artifactId,
+                  const record = await createArtifactRecord({
                     filename: toolInput.filename,
-                    threadId: threadId,
-                    currentVersion: version,
-                    versions: [{
-                      version,
-                      filename: versionedFilename,
-                      createdAt: new Date().toISOString(),
-                      metadata: { description: toolInput.description || '' }
-                    }],
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
-                  };
+                    content: toolInput.content,
+                    metadata: { description: toolInput.description || '' },
+                    threadId
+                  });
+
+                  // const artifactId = generateId();
+                  // const version = 1;
                   
-                  const metadataPath = path.join(artifactDir, 'metadata.json');
-                  await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
-                  await updateThreadAfterArtifactChange(threadId);
+                  // const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+                  // await fs.mkdir(artifactDir, { recursive: true });
                   
-                  console.log(`  ✅ Artifact created: ${artifactId} (${toolInput.filename})`);
+                  // const versionedFilename = `${toolInput.filename}_v${version}`;
+                  // const filePath = path.join(artifactDir, versionedFilename);
+                  // await fs.writeFile(filePath, toolInput.content, 'utf-8');
+                  
+                  // const artifactMetadata = {
+                  //   id: artifactId,
+                  //   filename: toolInput.filename,
+                  //   threadId: threadId,
+                  //   currentVersion: version,
+                  //   versions: [{
+                  //     version,
+                  //     filename: versionedFilename,
+                  //     createdAt: new Date().toISOString(),
+                  //     metadata: { description: toolInput.description || '' }
+                  //   }],
+                  //   createdAt: new Date().toISOString(),
+                  //   updatedAt: new Date().toISOString()
+                  // };
+                  
+                  // const metadataPath = path.join(artifactDir, 'metadata.json');
+                  // await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
+                  // await updateThreadAfterArtifactChange(threadId);
+                  
+                  // console.log(`  ✅ Artifact created: ${artifactId} (${toolInput.filename})`);
+                  console.log(`  ✅ Artifact created: ${record.artifactId} (${record.displayFilename})`);
 
                   toolResult = {
                     success: true,
-                    artifactId,
-                    version,
-                    filename: versionedFilename,
+                    artifactId: record.artifactId,
+                    filename: record.displayFilename,
+                    storageFilename: record.filename,
                     fileContent: toolInput.content,
-                    message: `Successfully created artifact: ${toolInput.filename}`
+                    version: record.version,
+                    message: `Successfully created artifact: ${record.displayFilename}`
                   };
+                  // toolResult = {
+                  //   success: true,
+                  //   artifactId,
+                  //   version,
+                  //   filename: versionedFilename,
+                  //   fileContent: toolInput.content,
+                  //   message: `Successfully created artifact: ${toolInput.filename}`
+                  // };
                   
                   allToolCalls.push({
                     type: 'create_artifact',
@@ -1026,41 +1072,59 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
               if (item.name === 'edit_artifact') {
                 try {
                   console.log('  ✏️ Editing artifact...');
-                  const artifactId = toolInput.artifact_id;
-                  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-                  const metadataPath = path.join(artifactDir, 'metadata.json');
-                  
-                  const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-                  const artifactMetadata = JSON.parse(metadataContent);
-                  
-                  const newVersion = artifactMetadata.currentVersion + 1;
-                  const versionedFilename = `${artifactMetadata.filename}_v${newVersion}`;
-                  const filePath = path.join(artifactDir, versionedFilename);
-                  
-                  await fs.writeFile(filePath, toolInput.content, 'utf-8');
-                  
-                  artifactMetadata.currentVersion = newVersion;
-                  artifactMetadata.versions.push({
-                    version: newVersion,
-                    filename: versionedFilename,
-                    createdAt: new Date().toISOString(),
+                  const record = await appendArtifactVersion({
+                    artifactId: toolInput.artifact_id,
+                    content: toolInput.content,
                     metadata: { description: toolInput.description || '' }
                   });
-                  artifactMetadata.updatedAt = new Date().toISOString();
-                  
-                  await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
-                  await updateThreadAfterArtifactChange(artifactMetadata.threadId);
-                  
-                  console.log(`  ✅ Artifact edited: ${artifactId} (v${newVersion})`);
+
+                  console.log(`  ✅ Artifact edited: ${record.artifactId} (v${record.version})`);
                   
                   toolResult = {
                     success: true,
-                    artifactId,
-                    filename: versionedFilename,
+                    artifactId: record.artifactId,
+                    filename: record.displayFilename,
+                    storageFilename: record.filename,
+                    version: record.version,
                     fileContent: toolInput.content,
-                    version: newVersion,
-                    message: `Successfully updated artifact to version ${newVersion}`
+                    message: `Successfully updated artifact to version ${record.version}`
                   };
+
+                  // const artifactId = toolInput.artifact_id;
+                  // const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+                  // const metadataPath = path.join(artifactDir, 'metadata.json');
+                  
+                  // const metadataContent = await fs.readFile(metadataPath, 'utf-8');
+                  // const artifactMetadata = JSON.parse(metadataContent);
+                  
+                  // const newVersion = artifactMetadata.currentVersion + 1;
+                  // const versionedFilename = `${artifactMetadata.filename}_v${newVersion}`;
+                  // const filePath = path.join(artifactDir, versionedFilename);
+                  
+                  // await fs.writeFile(filePath, toolInput.content, 'utf-8');
+                  
+                  // artifactMetadata.currentVersion = newVersion;
+                  // artifactMetadata.versions.push({
+                  //   version: newVersion,
+                  //   filename: versionedFilename,
+                  //   createdAt: new Date().toISOString(),
+                  //   metadata: { description: toolInput.description || '' }
+                  // });
+                  // artifactMetadata.updatedAt = new Date().toISOString();
+                  
+                  // await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
+                  // await updateThreadAfterArtifactChange(artifactMetadata.threadId);
+                  
+                  // console.log(`  ✅ Artifact edited: ${artifactId} (v${newVersion})`);
+                  
+                  // toolResult = {
+                  //   success: true,
+                  //   artifactId,
+                  //   filename: versionedFilename,
+                  //   fileContent: toolInput.content,
+                  //   version: newVersion,
+                  //   message: `Successfully updated artifact to version ${newVersion}`
+                  // };
                   
                   allToolCalls.push({
                     type: 'edit_artifact',
@@ -1469,17 +1533,24 @@ app.post('/api/artifacts/upload', upload.array('files'), async (req, res) => {
     const results = [];
     for (const file of req.files) {
       try {
-        const fileMetadata = metadataPayload[file.originalname] || {};
+        const decodedName = decodeMulterFilename(file.originalname);
+        const safeFilename = sanitizeFilename(decodedName);
+        const fileMetadata = metadataPayload[decodedName] ?? metadataPayload[file.originalname] ?? {};
+        // const fileMetadata = metadataPayload[file.originalname] || {};
         const record = await createArtifactRecord({
-          filename: file.originalname,
+          filename: safeFilename,
+          // filename: file.originalname,
           content: file.buffer,
           metadata: fileMetadata,
           threadId
         });
-        results.push({ ...record, originalName: file.originalname });
+        results.push({
+          ...record,
+          originalName: decodedName
+        });
       } catch (fileError) {
         results.push({
-          originalName: file.originalname,
+          originalName: decodeMulterFilename(file.originalname),
           error: fileError.message
         });
       }
