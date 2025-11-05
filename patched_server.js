@@ -515,195 +515,196 @@ async function appendArtifactVersion({ artifactId, content, metadata = {} }) {
 // patch_artifact ツール用ヘルパー関数
 // ==========================================
 
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /**
- * パターン内の連続空白を \s+ に変換した正規表現を生成
+ * テキストを正規化（連続スペース・改行を単一スペースに）
  */
-function buildFlexiblePattern(pattern) {
-  const tokens = pattern.trim().split(/\s+/).map(escapeRegExp);
-  if (tokens.length === 0) {
-    throw new Error('Pattern must contain at least one non-whitespace character');
-  }
-  return new RegExp(tokens.join('\\s+'), 'g');
+function normalizePattern(text) {
+  return text
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
- * マッチ範囲の先頭／末尾から余分な空白を取り除いたオフセットを返す
- */
-function trimWhitespaceAroundMatch(text, start, end) {
-  while (start < end && /\s/.test(text[start])) start += 1;
-  while (end > start && /\s/.test(text[end - 1])) end -= 1;
-  return { start, end };
-}
-
-/**
- * 柔軟な空白マッチを考慮して全マッチを返す（オフセットベース）
+ * テキスト内でパターンにマッチする全ての位置を検索
  */
 function findAllMatches(content, pattern) {
   const matches = [];
-  const regex = buildFlexiblePattern(pattern);
-  let match;
-
-  while ((match = regex.exec(content)) !== null) {
-    const rawStart = match.index;
-    const rawEnd = regex.lastIndex;
-    const { start, end } = trimWhitespaceAroundMatch(content, rawStart, rawEnd);
-
-    if (start === end) {
-      continue; // 空白しかなかった場合はスキップ
-    }
-
-    matches.push({
-      startOffset: start,
-      endOffset: end,
-      text: content.slice(start, end)
-    });
-
-    // 無限ループ防止（ゼロ幅マッチ対策）
-    if (regex.lastIndex === match.index) {
-      regex.lastIndex += 1;
+  const normalizedPattern = normalizePattern(pattern);
+  const lines = content.split('\n');
+  
+  // まず単一行でマッチを試みる
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const normalizedLine = normalizePattern(lines[lineIndex]);
+    
+    if (normalizedLine === normalizedPattern) {
+      matches.push({
+        startLine: lineIndex,
+        endLine: lineIndex,
+        text: lines[lineIndex]
+      });
     }
   }
-
+  
+  // 単一行でマッチしない場合、複数行ウィンドウを試す
+  if (matches.length === 0) {
+    for (let startLine = 0; startLine < lines.length; startLine++) {
+      for (let windowSize = 2; windowSize <= Math.min(10, lines.length - startLine); windowSize++) {
+        const windowLines = lines.slice(startLine, startLine + windowSize);
+        const windowText = windowLines.join('\n');
+        const normalizedWindow = normalizePattern(windowText);
+        
+        if (normalizedWindow === normalizedPattern) {
+          matches.push({
+            startLine,
+            endLine: startLine + windowSize - 1,
+            text: windowText
+          });
+          break;  // この開始位置からの最短マッチで停止
+        }
+      }
+    }
+  }
+  
   return matches;
 }
 
 /**
- * start/endパターンのマッチ同士をペアリング
+ * startパターンのマッチ位置から、最も近いendパターンのマッチを探す
  */
 function pairStartEnd(startMatches, endMatches, startPattern, endPattern) {
-  // start と end が同じ文字列なら同一マッチを利用
-  if (startPattern && endPattern && startPattern === endPattern) {
-    return startMatches.map(match => ({ startMatch: match, endMatch: match }));
-  }
-
   const pairs = [];
-  const usedEnd = new Set();
-
+  
+  // start_patternとend_patternが同じ場合は、同じマッチを使う
+  if (startPattern && endPattern && startPattern === endPattern) {
+    for (const match of startMatches) {
+      pairs.push({ startMatch: match, endMatch: match });
+    }
+    return pairs;
+  }
+  
+  // 異なる場合は通常のペアリング
+  const usedEndIndices = new Set();
+  
   for (const startMatch of startMatches) {
-    let candidate = null;
-    let candidateIndex = -1;
-
+    let closestEnd = null;
+    let closestIndex = -1;
+    
     for (let i = 0; i < endMatches.length; i++) {
-      if (usedEnd.has(i)) continue;
+      if (usedEndIndices.has(i)) continue;
+      
       const endMatch = endMatches[i];
-
-      if (endMatch.startOffset >= startMatch.endOffset) {
-        if (!candidate || endMatch.startOffset < candidate.startOffset) {
-          candidate = endMatch;
-          candidateIndex = i;
+      if (endMatch.startLine >= startMatch.endLine) {
+        if (!closestEnd || endMatch.startLine < closestEnd.startLine) {
+          closestEnd = endMatch;
+          closestIndex = i;
         }
       }
     }
-
-    if (candidate) {
-      pairs.push({ startMatch, endMatch: candidate });
-      usedEnd.add(candidateIndex);
+    
+    if (closestEnd) {
+      pairs.push({ startMatch, endMatch: closestEnd });
+      usedEndIndices.add(closestIndex);
     }
   }
-
+  
   return pairs;
 }
 
 /**
- * パッチを適用（オフセットベース）
+ * パッチを適用
  */
 function applyPatches(content, edits) {
   if (!Array.isArray(edits) || edits.length === 0) {
     throw new Error('edits must be a non-empty array');
   }
-
+  
   const appliedEdits = [];
-
+  
+  // 各editを処理
   for (const edit of edits) {
     const { edit_type, start_pattern, end_pattern, new_content } = edit;
-
+    
     if (!edit_type || !start_pattern) {
       throw new Error('Each edit must have edit_type and start_pattern');
     }
-
+    
     const startMatches = findAllMatches(content, start_pattern);
+    
     if (startMatches.length === 0) {
       throw new Error(`start_pattern not found: "${start_pattern.substring(0, 50)}..."`);
     }
-
+    
     if (edit_type === 'replace' || edit_type === 'delete') {
       if (!end_pattern) {
         throw new Error(`edit_type "${edit_type}" requires end_pattern`);
       }
-
+      
       const endMatches = findAllMatches(content, end_pattern);
+      
       if (endMatches.length === 0) {
         throw new Error(`end_pattern not found: "${end_pattern.substring(0, 50)}..."`);
       }
-
+      
       const pairs = pairStartEnd(startMatches, endMatches, start_pattern, end_pattern);
+      
       if (pairs.length === 0) {
         throw new Error('No valid start-end pairs found');
       }
-
-      for (const { startMatch, endMatch } of pairs) {
+      
+      for (const pair of pairs) {
         appliedEdits.push({
           type: edit_type,
-          startOffset: startMatch.startOffset,
-          endOffset: endMatch.endOffset,
-          newContent: edit_type === 'replace' ? (new_content ?? '') : ''
+          startLine: pair.startMatch.startLine,
+          endLine: pair.endMatch.endLine,
+          newContent: edit_type === 'replace' ? (new_content || '') : ''
         });
       }
+      
     } else if (edit_type === 'insert_before' || edit_type === 'insert_after') {
       for (const match of startMatches) {
         appliedEdits.push({
           type: edit_type,
-          startOffset: match.startOffset,
-          endOffset: match.endOffset,
-          newContent: new_content ?? ''
+          startLine: match.startLine,
+          endLine: match.endLine,
+          newContent: new_content || ''
         });
       }
+      
     } else {
       throw new Error(`Unknown edit_type: ${edit_type}`);
     }
   }
-
-  // オフセットの大きい順に適用
-  appliedEdits.sort((a, b) => b.startOffset - a.startOffset);
-
-  let updatedContent = content;
+  
+  // 編集を行番号の降順でソート
+  appliedEdits.sort((a, b) => b.startLine - a.startLine);
+  
+  // 実際に編集を適用
+  const lines = content.split('\n');
+  
   for (const edit of appliedEdits) {
     switch (edit.type) {
-      case 'replace': {
-        updatedContent =
-          updatedContent.slice(0, edit.startOffset) +
-          edit.newContent +
-          updatedContent.slice(edit.endOffset);
+      case 'replace':
+        const newLines = edit.newContent.split('\n');
+        lines.splice(edit.startLine, edit.endLine - edit.startLine + 1, ...newLines);
         break;
-      }
-      case 'delete': {
-        updatedContent =
-          updatedContent.slice(0, edit.startOffset) +
-          updatedContent.slice(edit.endOffset);
+        
+      case 'delete':
+        lines.splice(edit.startLine, edit.endLine - edit.startLine + 1);
         break;
-      }
-      case 'insert_before': {
-        updatedContent =
-          updatedContent.slice(0, edit.startOffset) +
-          edit.newContent +
-          updatedContent.slice(edit.startOffset);
+        
+      case 'insert_before':
+        const beforeLines = edit.newContent.split('\n');
+        lines.splice(edit.startLine, 0, ...beforeLines);
         break;
-      }
-      case 'insert_after': {
-        updatedContent =
-          updatedContent.slice(0, edit.endOffset) +
-          edit.newContent +
-          updatedContent.slice(edit.endOffset);
+        
+      case 'insert_after':
+        const afterLines = edit.newContent.split('\n');
+        lines.splice(edit.endLine + 1, 0, ...afterLines);
         break;
-      }
     }
   }
-
-  return updatedContent;
+  
+  return lines.join('\n');
 }
 
 // モデルのバリデーション
@@ -1040,8 +1041,8 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
         },
         {
           type: "function",
-          name: "replace_artifact",
-          description: "Replace whole content of an existing artifact by providing its ID and the new content. Use this when the user asks to modify an existing artifact.",
+          name: "edit_artifact",
+          description: "Edit an existing artifact by providing its ID and the new content. Use this when the user asks to modify an existing artifact.",
           parameters: {
             type: "object",
             properties: {
@@ -1064,7 +1065,7 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
         {
           type: "function",
           name: "read_artifact",
-          description: "Read the contents of an existing artifact. For large files, you can read specific portions (top/bottom lines) instead of the entire file.",
+          description: "Read the contents of an existing artifact so you can inspect or quote it in your response.",
           parameters: {
             type: "object",
             properties: {
@@ -1080,21 +1081,12 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
                 type: "string",
                 enum: ["utf-8", "base64"],
                 description: "Encoding for the returned content. Defaults to utf-8; use base64 for binary files."
-              },
-              range: {
-                type: "string",
-                enum: ["all", "top", "bottom"],
-                description: "Which part of the file to read. 'all' returns entire file, 'top' returns first N lines, 'bottom' returns last N lines. Defaults to 'all'."
-              },
-              line_count: {
-                type: "integer",
-                description: "Number of lines to read when range is 'top' or 'bottom'. Required when range is not 'all'. Must be positive.",
-                minimum: 1
               }
             },
             required: ["artifact_id"]
           }
-        },
+        }
+,
         {
           type: "function",
           name: "patch_artifact",
@@ -1144,47 +1136,6 @@ If start_pattern matches multiple locations, the operation is applied to all mat
               }
             },
             required: ["artifact_id", "edits"]
-          }
-        },
-        {
-          type: "function",
-          name: "search_in_artifact",
-          description: "Search for patterns in an artifact and return matching sections with context lines. Useful for locating specific code or content in large files. Whitespace in patterns is normalized (consecutive spaces/tabs/newlines treated as single space).",
-          parameters: {
-            type: "object",
-            properties: {
-              artifact_id: {
-                type: "string",
-                description: "The ID of the artifact to search"
-              },
-              version: {
-                type: "integer",
-                description: "Specific version to search. Defaults to the latest version."
-              },
-              search_pattern: {
-                type: "string",
-                description: "Pattern to search for. Whitespace is normalized, so 'function\\n\\nfoo' will match 'function foo'."
-              },
-              context_before: {
-                type: "integer",
-                description: "Number of lines to include before each match",
-                default: 2,
-                minimum: 0
-              },
-              context_after: {
-                type: "integer",
-                description: "Number of lines to include after each match",
-                default: 2,
-                minimum: 0
-              },
-              max_matches: {
-                type: "integer",
-                description: "Maximum number of matches to return. Defaults to 10 to avoid overwhelming responses.",
-                default: 10,
-                minimum: 1
-              }
-            },
-            required: ["artifact_id", "search_pattern"]
           }
         }
       ];
@@ -1327,7 +1278,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
               }
               
               // Artifact編集ツール
-              if (item.name === 'replace_artifact') {
+              if (item.name === 'edit_artifact') {
                 try {
                   console.log('  ✏️ Editing artifact...');
                   const record = await appendArtifactVersion({
@@ -1349,7 +1300,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                   };
 
                   allToolCalls.push({
-                    type: 'replace_artifact',
+                    type: 'edit_artifact',
                     name: item.name,
                     input: toolInput,
                     result: toolResult
@@ -1362,7 +1313,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                   };
                   
                   allToolCalls.push({
-                    type: 'replace_artifact',
+                    type: 'edit_artifact',
                     name: item.name,
                     input: toolInput,
                     error: error.message
@@ -1377,17 +1328,6 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                   const artifactId = toolInput.artifact_id;
                   const requestedVersion = typeof toolInput.version === 'number' ? toolInput.version : null;
                   const encoding = toolInput.encoding === 'base64' ? 'base64' : 'utf-8';
-                  const range = toolInput.range || 'all';
-                  const lineCount = toolInput.line_count;
-
-                  // バリデーション
-                  if ((range === 'top' || range === 'bottom') && !lineCount) {
-                    throw new Error('line_count is required when range is "top" or "bottom"');
-                  }
-                  
-                  if (lineCount && lineCount < 1) {
-                    throw new Error('line_count must be a positive integer');
-                  }
 
                   const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
                   const metadataPath = path.join(artifactDir, 'metadata.json');
@@ -1408,39 +1348,9 @@ If start_pattern matches multiple locations, the operation is applied to all mat
 
                   const filePath = path.join(artifactDir, versionData.filename);
                   const fileBuffer = await fs.readFile(filePath);
-                  
-                  let fileContent;
-                  let totalLines = null;
-                  let returnedLines = null;
-                  let isTruncated = false;
-                  
-                  if (encoding === 'base64') {
-                    // バイナリファイルの場合はrangeオプションは適用されない
-                    fileContent = fileBuffer.toString('base64');
-                    if (range !== 'all') {
-                      console.warn('range option is ignored for base64 encoding');
-                    }
-                  } else {
-                    const fullContent = fileBuffer.toString('utf-8');
-                    const lines = fullContent.split('\n');
-                    totalLines = lines.length;
-                    
-                    if (range === 'all') {
-                      fileContent = fullContent;
-                      returnedLines = totalLines;
-                    } else if (range === 'top') {
-                      const selectedLines = lines.slice(0, lineCount);
-                      fileContent = selectedLines.join('\n');
-                      returnedLines = selectedLines.length;
-                      isTruncated = totalLines > lineCount;
-                    } else if (range === 'bottom') {
-                      const startIndex = Math.max(0, totalLines - lineCount);
-                      const selectedLines = lines.slice(startIndex);
-                      fileContent = selectedLines.join('\n');
-                      returnedLines = selectedLines.length;
-                      isTruncated = totalLines > lineCount;
-                    }
-                  }
+                  const fileContent = encoding === 'base64'
+                    ? fileBuffer.toString('base64')
+                    : fileBuffer.toString('utf-8');
 
                   toolResult = {
                     success: true,
@@ -1449,14 +1359,8 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                     version: versionData.version,
                     encoding,
                     content: fileContent,
-                    range,
-                    totalLines,
-                    returnedLines,
-                    isTruncated,
                     metadata: versionData.metadata ?? {},
-                    message: `Successfully read artifact ${artifactMetadata.filename} (v${versionData.version})${
-                      range !== 'all' ? ` - ${range} ${returnedLines} of ${totalLines} lines` : ''
-                    }`,
+                    message: `Successfully read artifact ${artifactMetadata.filename} (v${versionData.version})`
                   };
 
                   allToolCalls.push({
@@ -1467,54 +1371,6 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                   });
 
                   console.log(`  ✅ Artifact read: ${artifactId} (v${versionData.version})`);
-
-                  // console.log('  📖 Reading artifact...');
-                  // const artifactId = toolInput.artifact_id;
-                  // const requestedVersion = typeof toolInput.version === 'number' ? toolInput.version : null;
-                  // const encoding = toolInput.encoding === 'base64' ? 'base64' : 'utf-8';
-
-                  // const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-                  // const metadataPath = path.join(artifactDir, 'metadata.json');
-                  // const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-                  // const artifactMetadata = JSON.parse(metadataContent);
-
-                  // const versionData = requestedVersion
-                  //   ? artifactMetadata.versions.find(v => v.version === requestedVersion)
-                  //   : artifactMetadata.versions.at(-1);
-
-                  // if (!versionData) {
-                  //   throw new Error(
-                  //     requestedVersion
-                  //       ? `Artifact version ${requestedVersion} not found`
-                  //       : 'No versions found for artifact'
-                  //   );
-                  // }
-
-                  // const filePath = path.join(artifactDir, versionData.filename);
-                  // const fileBuffer = await fs.readFile(filePath);
-                  // const fileContent = encoding === 'base64'
-                  //   ? fileBuffer.toString('base64')
-                  //   : fileBuffer.toString('utf-8');
-
-                  // toolResult = {
-                  //   success: true,
-                  //   artifactId,
-                  //   filename: artifactMetadata.filename,
-                  //   version: versionData.version,
-                  //   encoding,
-                  //   content: fileContent,
-                  //   metadata: versionData.metadata ?? {},
-                  //   message: `Successfully read artifact ${artifactMetadata.filename} (v${versionData.version})`
-                  // };
-
-                  // allToolCalls.push({
-                  //   type: 'read_artifact',
-                  //   name: item.name,
-                  //   input: toolInput,
-                  //   result: toolResult
-                  // });
-
-                  // console.log(`  ✅ Artifact read: ${artifactId} (v${versionData.version})`);
                 } catch (error) {
                   console.error('  ❌ Failed to read artifact:', error);
                   toolResult = {
@@ -1603,117 +1459,6 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                 }
               }
 
-              if (item.name === 'search_in_artifact') {
-                try{    
-                  console.log('  🔍 Searching in artifact...');
-                  const artifactId = toolInput.artifact_id;
-                  const requestedVersion = typeof toolInput.version === 'number' ? toolInput.version : null;
-                  const searchPattern = toolInput.search_pattern;
-                  const contextBefore = toolInput.context_before ?? 2;
-                  const contextAfter = toolInput.context_after ?? 2;
-                  const maxMatches = toolInput.max_matches ?? 10;
-
-                  if (!searchPattern || searchPattern.trim().length === 0) {
-                    throw new Error('search_pattern must be a non-empty string');
-                  }
-
-                  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-                  const metadataPath = path.join(artifactDir, 'metadata.json');
-                  const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-                  const artifactMetadata = JSON.parse(metadataContent);
-
-                  const versionData = requestedVersion
-                    ? artifactMetadata.versions.find(v => v.version === requestedVersion)
-                    : artifactMetadata.versions.at(-1);
-
-                  if (!versionData) {
-                    throw new Error(
-                      requestedVersion
-                        ? `Artifact version ${requestedVersion} not found`
-                        : 'No versions found for artifact'
-                    );
-                  }
-
-                  const filePath = path.join(artifactDir, versionData.filename);
-                  const content = await fs.readFile(filePath, 'utf-8');
-                  
-                  // findAllMatchesを再利用（既存のpatch_artifact用関数）
-                  const matches = findAllMatches(content, searchPattern);
-                  
-                  // 行単位の情報を構築
-                  const lines = content.split('\n');
-                  const results = [];
-                  
-                  for (let i = 0; i < Math.min(matches.length, maxMatches); i++) {
-                    const match = matches[i];
-                    
-                    // マッチ位置を行番号に変換
-                    const beforeMatch = content.slice(0, match.startOffset);
-                    const matchStartLine = beforeMatch.split('\n').length - 1; // 0-indexed
-                    const matchText = content.slice(match.startOffset, match.endOffset);
-                    const matchLineCount = matchText.split('\n').length;
-                    const matchEndLine = matchStartLine + matchLineCount - 1; // 0-indexed
-                    
-                    // コンテキスト行を含めた範囲を計算
-                    const startLine = Math.max(0, matchStartLine - contextBefore);
-                    const endLine = Math.min(lines.length - 1, matchEndLine + contextAfter);
-                    
-                    const contextLines = lines.slice(startLine, endLine + 1);
-                    
-                    results.push({
-                      matchIndex: i + 1,
-                      lineRange: {
-                        start: startLine + 1, // 1-based line numbers for display
-                        end: endLine + 1,
-                        matchStart: matchStartLine + 1,
-                        matchEnd: matchEndLine + 1
-                      },
-                      content: contextLines.join('\n'),
-                      matchedText: match.text,
-                      // マッチ位置を示すマーカー（オプション）
-                      contextInfo: `Lines ${startLine + 1}-${endLine + 1} (match at ${matchStartLine + 1}-${matchEndLine + 1})`
-                    });
-                  }
-                  
-                  console.log(`  ✅ Searched in artifact: ${searchPattern} are found in ${artifactId} (v${versionData.version}) x${results.length}`);
-
-                  toolResult = {
-                    success: true,
-                    artifactId,
-                    filename: artifactMetadata.filename,
-                    version: versionData.version,
-                    searchPattern,
-                    totalMatches: matches.length,
-                    returnedMatches: results.length,
-                    hasMoreMatches: matches.length > maxMatches,
-                    matches: results,
-                    message: `Found ${matches.length} match(es) for pattern in ${artifactMetadata.filename}${
-                      matches.length > maxMatches ? ` (showing first ${maxMatches})` : ''
-                    }`
-                  };
-                  
-                  allToolCalls.push({
-                    type: 'search_in_artifact',
-                    name: item.name,
-                    input: toolInput,
-                    result: toolResult
-                  });
-                } catch (error) {
-                  console.error('  ❌ Failed to search in artifact:', error);
-                  toolResult = {
-                    success: false,
-                    error: error.message
-                  };
-                  
-                  allToolCalls.push({
-                    type: 'search_in_artifact',
-                    name: item.name,
-                    input: toolInput,
-                    error: error.message
-                  });
-                }
-              }
-
               // ツール結果を会話履歴に追加
               if (toolResult) {
                 toolCallsInThisIteration.push({
@@ -1729,7 +1474,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
         }
 
         // create/edit artifactツール呼び出しがあった場合、スレッドの派生状態を更新
-        if (toolCallsInThisIteration.some(call => ['create_artifact', 'replace_artifact'].includes(call.name))) {
+        if (toolCallsInThisIteration.some(call => ['create_artifact', 'edit_artifact'].includes(call.name))) {
           await refreshThreadDerivedState(thread, { persist: true });
         }
 
@@ -1989,11 +1734,6 @@ app.get('/api/artifacts', async (req, res) => {
     const artifactDirs = await fs.readdir(ARTIFACTS_DIR);
     const artifacts = [];
     
-    // threadIdがクエリにないなら即座に空配列を返す
-    if (!threadId) {
-      return res.json({ artifacts: [] });
-    }
-
     for (const dir of artifactDirs) {
       const metadataPath = path.join(ARTIFACTS_DIR, dir, 'metadata.json');
       try {
