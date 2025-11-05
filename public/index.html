@@ -1672,7 +1672,7 @@
                 });
                 const data = await response.json();
                 applySystemPromptData(data);
-                document.getElementById('systemPromptStatus').textContent = '保存しました (自動同期中)';
+                document.getElementById('systemPromptStatus').textContent = 'プロンプトを保存しました (自動同期中)';
             } catch (error) {
                 console.error('Failed to save system prompt:', error);
                 alert('システムプロンプトの保存に失敗しました');

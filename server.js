@@ -116,7 +116,7 @@ const AUTO_PROMPT_MARKER_END = '-----';
 // OpenAIクライアントの初期化
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  timeout: 5 * 60 * 1000, // 5分 (300秒) = 300,000ms
+  timeout: 15 * 60 * 1000, // 15分 (900秒) = 900,000ms
   maxRetries: 2
 });
 
@@ -995,37 +995,6 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
                     metadata: { description: toolInput.description || '' },
                     threadId
                   });
-
-                  // const artifactId = generateId();
-                  // const version = 1;
-                  
-                  // const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-                  // await fs.mkdir(artifactDir, { recursive: true });
-                  
-                  // const versionedFilename = `${toolInput.filename}_v${version}`;
-                  // const filePath = path.join(artifactDir, versionedFilename);
-                  // await fs.writeFile(filePath, toolInput.content, 'utf-8');
-                  
-                  // const artifactMetadata = {
-                  //   id: artifactId,
-                  //   filename: toolInput.filename,
-                  //   threadId: threadId,
-                  //   currentVersion: version,
-                  //   versions: [{
-                  //     version,
-                  //     filename: versionedFilename,
-                  //     createdAt: new Date().toISOString(),
-                  //     metadata: { description: toolInput.description || '' }
-                  //   }],
-                  //   createdAt: new Date().toISOString(),
-                  //   updatedAt: new Date().toISOString()
-                  // };
-                  
-                  // const metadataPath = path.join(artifactDir, 'metadata.json');
-                  // await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
-                  // await updateThreadAfterArtifactChange(threadId);
-                  
-                  // console.log(`  ✅ Artifact created: ${artifactId} (${toolInput.filename})`);
                   console.log(`  ✅ Artifact created: ${record.artifactId} (${record.displayFilename})`);
 
                   toolResult = {
@@ -1037,14 +1006,6 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
                     version: record.version,
                     message: `Successfully created artifact: ${record.displayFilename}`
                   };
-                  // toolResult = {
-                  //   success: true,
-                  //   artifactId,
-                  //   version,
-                  //   filename: versionedFilename,
-                  //   fileContent: toolInput.content,
-                  //   message: `Successfully created artifact: ${toolInput.filename}`
-                  // };
                   
                   allToolCalls.push({
                     type: 'create_artifact',
@@ -1090,42 +1051,6 @@ app.post('/api/threads/:threadId/messages', async (req, res) => {
                     message: `Successfully updated artifact to version ${record.version}`
                   };
 
-                  // const artifactId = toolInput.artifact_id;
-                  // const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-                  // const metadataPath = path.join(artifactDir, 'metadata.json');
-                  
-                  // const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-                  // const artifactMetadata = JSON.parse(metadataContent);
-                  
-                  // const newVersion = artifactMetadata.currentVersion + 1;
-                  // const versionedFilename = `${artifactMetadata.filename}_v${newVersion}`;
-                  // const filePath = path.join(artifactDir, versionedFilename);
-                  
-                  // await fs.writeFile(filePath, toolInput.content, 'utf-8');
-                  
-                  // artifactMetadata.currentVersion = newVersion;
-                  // artifactMetadata.versions.push({
-                  //   version: newVersion,
-                  //   filename: versionedFilename,
-                  //   createdAt: new Date().toISOString(),
-                  //   metadata: { description: toolInput.description || '' }
-                  // });
-                  // artifactMetadata.updatedAt = new Date().toISOString();
-                  
-                  // await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
-                  // await updateThreadAfterArtifactChange(artifactMetadata.threadId);
-                  
-                  // console.log(`  ✅ Artifact edited: ${artifactId} (v${newVersion})`);
-                  
-                  // toolResult = {
-                  //   success: true,
-                  //   artifactId,
-                  //   filename: versionedFilename,
-                  //   fileContent: toolInput.content,
-                  //   version: newVersion,
-                  //   message: `Successfully updated artifact to version ${newVersion}`
-                  // };
-                  
                   allToolCalls.push({
                     type: 'edit_artifact',
                     name: item.name,
