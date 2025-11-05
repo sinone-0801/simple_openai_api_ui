@@ -116,7 +116,7 @@ const AUTO_PROMPT_MARKER_END = '-----';
 // OpenAIクライアントの初期化
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  timeout: 15 * 60 * 1000, // 15分 (900秒) = 900,000ms
+  timeout: 30 * 60 * 1000, // 30分 (1,800秒) = 1,800,000ms
   maxRetries: 2
 });
 
