@@ -32,10 +32,11 @@ npm start
 
 ## 3. next-step
     Artifact編集ツールの省力化（全文出力はトークン消費が激しい）
+    Reasoning部分や、場合によってはToolCall部分を、会話履歴に追加（現在はReasoningしても内容はロスしている）
+    toolsにAIエージェント追加
     別々のスレッドから同じアーティファクトの参照（アーティファクト検索エクスプローラが必要？）
     Reasningの強度設定をチャットヘッダーに追加
     UIからMCPツールの追加・設定
-    Reasoning部分や、場合によってはToolCall部分を、会話履歴に追加（現在はReasoningしても内容はロスしている）
     Shift-jis対応
 
     1. レスポンシブ対応

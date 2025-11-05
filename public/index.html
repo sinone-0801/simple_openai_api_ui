@@ -181,20 +181,28 @@
             transition: filter 0.3s ease;
         }
 
-        .chat-header {
-            max-height: 85vh;
-            overflow-y: auto;
-            padding-right: 12px;
-            padding: 20px;
-            border-bottom: 1px solid #3a3a3a;
-            background: #2a2a2a;
-            flex-shrink: 0;
+        .mobile-header-toggle,
+        .mobile-input-toggle {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #333;
+            color: #e0e0e0;
+            font-size: 14px;
+            cursor: pointer;
         }
 
-        .chat-header h2 {
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 10px;
+        .mobile-header-toggle:active,
+        .mobile-input-toggle:active {
+            background: #3f3f3f;
+        }
+
+        .toggle-icon {
+            font-size: 16px;
         }
 
         .mobile-toolbar {
@@ -222,6 +230,33 @@
 
         .mobile-toggle-btn:active {
             background: #3f3f3f;
+        }
+
+        .chat-header {
+            max-height: 85vh;
+            overflow-y: auto;
+            padding-right: 12px;
+            padding: 20px;
+            border-bottom: 1px solid #3a3a3a;
+            background: #2a2a2a;
+            flex-shrink: 0;
+        }
+
+        .chat-header h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .chat-header-content {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+        
+        .chat-header.collapsed .chat-header-content,
+        .input-area.collapsed .input-area-content {
+            display: none;
         }
 
         .chat-header::-webkit-scrollbar {
@@ -445,9 +480,16 @@
 
         .input-area {
             padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
             border-top: 1px solid #3a3a3a;
             background: #2a2a2a;
             flex-shrink: 0;
+        }
+
+        .input-area-content {
+            width: 100%;
         }
 
         .input-form {
@@ -463,9 +505,47 @@
             border-radius: 6px;
             color: #e0e0e0;
             font-size: 14px;
-            resize: vertical;
-            min-height: 80px;
+            resize: none;
+            min-height: 120px;
+            max-height: 60vh;
             font-family: inherit;
+        }
+
+        .input-wrapper {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+
+        .resize-handle {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 8px;
+            cursor: ns-resize;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .resize-handle::before {
+            content: '';
+            width: 40px;
+            height: 4px;
+            background: #555;
+            border-radius: 2px;
+            transition: background 0.2s;
+        }
+
+        .resize-handle:hover::before {
+            background: #0066cc;
+        }
+
+        .resize-handle:active::before {
+            background: #0052a3;
         }
 
         .message-input:focus {
@@ -919,6 +999,29 @@
         @media (max-width: 600px) {
             .chat-header h2 {
                 font-size: 18px;
+                padding: 12px 16px;
+            }
+
+            .chat-header .mobile-header-toggle,
+            .input-area .mobile-input-toggle {
+                display: flex;
+            }
+
+            .chat-header .mobile-header-toggle {
+                margin-bottom: 12px;
+            }
+
+            .chat-header.collapsed .mobile-header-toggle {
+                margin-bottom: 0;
+            }
+
+            .input-area {
+                padding: 16px;
+                padding-bottom: calc(36px + env(safe-area-inset-bottom, 0px));
+            }
+
+            .input-area.collapsed {
+                padding-bottom: calc(36px + env(safe-area-inset-bottom, 0px));
             }
 
             .message-content {
@@ -927,6 +1030,11 @@
 
             .mobile-toggle-btn {
                 font-size: 13px;
+            }
+
+            .message-input {
+                min-height: 110px;
+                max-height: 50vh;
             }
 
             .system-prompt-header {
@@ -979,44 +1087,57 @@
         <!-- メインコンテンツ：チャット -->
         <div class="main-content">
             <div class="chat-header">
-                <div class="mobile-toolbar">
-                    <button class="mobile-toggle-btn" onclick="toggleLeftSidebar()" aria-label="スレッドサイドバーを開く">
-                        <span>☰</span>
-                        <span>スレッド</span>
-                    </button>
-                    <button class="mobile-toggle-btn" onclick="toggleRightSidebar()" aria-label="アーティファクトサイドバーを開く">
-                        <span>📁</span>
-                        <span>アーティファクト</span>
-                    </button>
-                </div>
-                <h2 id="chatTitle">スレッドを選択してください</h2>
-                <!-- モデル管理カード -->
-                <div class="model-selector" id="modelSelector" style="display: none;">
-                    <label for="modelSelect">モデル:</label>
-                    <select id="modelSelect" onchange="changeModel()"></select>
-                </div>
-                <!-- システムプロンプト管理カード -->
-                <div class="system-prompt-header">
-                    <div class="system-prompt-controls">
-                        <span id="systemPromptStatus" class="system-prompt-status">システムプロンプト 自動同期中</span>
-                        <button class="system-prompt-toggle" onclick="toggleSystemPromptPanel()">表示/非表示</button>
+                <button
+                    class="mobile-header-toggle"
+                    id="mobileHeaderToggle"
+                    type="button"
+                    onclick="toggleMobileHeader()"
+                    aria-label="チャットヘッダーを開閉"
+                    aria-expanded="false"
+                >
+                    <span class="toggle-icon">☰</span>
+                    <span class="toggle-label">ヘッダーを開く</span>
+                </button>
+                <div class="chat-header-content">
+                    <div class="mobile-toolbar">
+                        <button class="mobile-toggle-btn" onclick="toggleLeftSidebar()" aria-label="スレッドサイドバーを開く">
+                            <span>☰</span>
+                            <span>スレッド</span>
+                        </button>
+                        <button class="mobile-toggle-btn" onclick="toggleRightSidebar()" aria-label="アーティファクトサイドバーを開く">
+                            <span>📁</span>
+                            <span>アーティファクト</span>
+                        </button>
                     </div>
-                </div>
-                <div id="systemPromptWrapper" class="system-prompt-wrapper hidden">
-                    <div id="systemPromptPanel" class="system-prompt-panel">
-                        <label class="form-label">ユーザー編集可能なベースプロンプト</label>
-                        <textarea id="systemPromptUserInput" class="form-textarea system-prompt-textarea" spellcheck="false"></textarea>
-                        <div class="system-prompt-actions">
-                            <button id="systemPromptSaveBtn" class="btn btn-primary" onclick="saveSystemPrompt()" disabled>保存</button>
-                            <button class="btn btn-secondary" onclick="refreshSystemPrompt()" disabled>再読み込み</button>
+                    <h2 id="chatTitle">スレッドを選択してください</h2>
+                    <!-- モデル管理カード -->
+                    <div class="model-selector" id="modelSelector" style="display: none;">
+                        <label for="modelSelect">モデル:</label>
+                        <select id="modelSelect" onchange="changeModel()"></select>
+                    </div>
+                    <!-- システムプロンプト管理カード -->
+                    <div class="system-prompt-header">
+                        <div class="system-prompt-controls">
+                            <span id="systemPromptStatus" class="system-prompt-status">システムプロンプト 自動同期中</span>
+                            <button class="system-prompt-toggle" onclick="toggleSystemPromptPanel()">表示/非表示</button>
                         </div>
-                        <div class="system-prompt-section">
-                            <div class="system-prompt-section-title">自動連携アーティファクト一覧 (JSON)</div>
-                            <pre><code id="systemPromptAutoPreview">{}</code></pre>
-                        </div>
-                        <div class="system-prompt-section">
-                            <div class="system-prompt-section-title">送信時に利用されるシステムプロンプト</div>
-                            <pre><code id="systemPromptEffectivePreview"></code></pre>
+                    </div>
+                    <div id="systemPromptWrapper" class="system-prompt-wrapper hidden">
+                        <div id="systemPromptPanel" class="system-prompt-panel">
+                            <label class="form-label">ユーザー編集可能なベースプロンプト</label>
+                            <textarea id="systemPromptUserInput" class="form-textarea system-prompt-textarea" spellcheck="false"></textarea>
+                            <div class="system-prompt-actions">
+                                <button id="systemPromptSaveBtn" class="btn btn-primary" onclick="saveSystemPrompt()" disabled>保存</button>
+                                <button class="btn btn-secondary" onclick="refreshSystemPrompt()" disabled>再読み込み</button>
+                            </div>
+                            <div class="system-prompt-section">
+                                <div class="system-prompt-section-title">自動連携アーティファクト一覧 (JSON)</div>
+                                <pre><code id="systemPromptAutoPreview">{}</code></pre>
+                            </div>
+                            <div class="system-prompt-section">
+                                <div class="system-prompt-section-title">送信時に利用されるシステムプロンプト</div>
+                                <pre><code id="systemPromptEffectivePreview"></code></pre>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1025,15 +1146,31 @@
             <div id="chatArea" class="chat-area hidden">
                 <div id="messagesContainer" class="messages-container"></div>
                 <div class="input-area">
-                    <form class="input-form" onsubmit="sendMessage(event)">
-                        <textarea 
-                            id="messageInput" 
-                            class="message-input" 
-                            placeholder="メッセージを入力... (Shift+Enterで送信)"
-                            onkeydown="handleInputKeydown(event)"
-                        ></textarea>
-                        <button id="sendBtn" type="submit" class="send-btn">送信</button>
-                    </form>
+                    <button
+                        class="mobile-input-toggle"
+                        id="mobileInputToggle"
+                        type="button"
+                        onclick="toggleMobileInput()"
+                        aria-label="メッセージ入力欄を開閉"
+                        aria-expanded="false"
+                    >
+                        <span class="toggle-icon">✉️</span>
+                        <span class="toggle-label">入力欄を開く</span>
+                    </button>
+                    <div class="input-area-content">
+                        <form class="input-form" onsubmit="sendMessage(event)">
+                            <div class="input-wrapper">
+                                <div class="resize-handle" id="resizeHandle"></div>
+                                <textarea
+                                    id="messageInput"
+                                    class="message-input"
+                                    placeholder="メッセージを入力... (Shift+Enterで送信)"
+                                    onkeydown="handleInputKeydown(event)"
+                                ></textarea>
+                            </div>
+                            <button id="sendBtn" type="submit" class="send-btn">送信</button>
+                        </form>
+                    </div>
                 </div>
             </div>
 
@@ -1190,167 +1327,76 @@
         };
         let isUploadingArtifacts = false;
         let artifactDropzoneUpdater = null;
+        const MOBILE_BREAKPOINT = 600;
+        let isMobileViewport = null;
 
-        function getFileExtension(filename = '') {
-            const lastDot = filename.lastIndexOf('.');
-            if (lastDot === -1) return '';
-            return filename.slice(lastDot).toLowerCase();
-        }
+        function initResizeHandle() {
+            const resizeHandle = document.getElementById('resizeHandle');
+            const messageInput = document.getElementById('messageInput');
+            if (!resizeHandle || !messageInput) return;
 
-        function isAllowedTextExtension(filename = '') {
-            const ext = getFileExtension(filename);
-            if (!ext) return false;
-            return ALLOWED_TEXT_EXTENSIONS.has(ext);
-        }
+            let isResizing = false;
+            let startY = 0;
+            let startHeight = 0;
 
-        function splitFilesByExtension(files = []) {
-            const allowed = [];
-            const rejected = [];
-            files.forEach((file) => {
-                if (isAllowedTextExtension(file.name)) {
-                    allowed.push(file);
-                } else {
-                    rejected.push(file);
-                }
-            });
-            return { allowed, rejected };
-        }
-
-        function initArtifactDropzone() {
-            const dropzone = document.getElementById('artifactDropzone');
-            const fileInput = document.getElementById('artifactFileInput');
-
-            if (!dropzone || !fileInput) return;
-
-            const updateDropzoneState = () => {
-                dropzone.classList.toggle('disabled', !currentThreadId || isUploadingArtifacts);
-                dropzone.querySelector('#artifactDropzoneLabel').textContent =
-                    !currentThreadId ? 'スレッドを選択してください' :
-                    isUploadingArtifacts ? 'アップロード中...' :
-                    DROPZONE_TEXT_DEFAULT;
-            };
-
-            const highlight = (evt) => {
-                evt.preventDefault();
-                if (!currentThreadId || isUploadingArtifacts) return;
-                dropzone.classList.add('dragover');
-            };
-
-            const unhighlight = (evt) => {
-                evt.preventDefault();
-                dropzone.classList.remove('dragover');
-            };
-
-            const handleDrop = (evt) => {
-                evt.preventDefault();
-                if (!currentThreadId || isUploadingArtifacts) return;
-                const files = evt.dataTransfer?.files;
-                if (files?.length) {
-                    uploadArtifacts(files);
-                }
-            };
-
-            dropzone.addEventListener('click', () => {
-                if (!currentThreadId || isUploadingArtifacts) return;
-                fileInput.click();
+            resizeHandle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                startY = e.clientY;
+                startHeight = messageInput.offsetHeight;
+                document.body.style.cursor = 'ns-resize';
+                document.body.style.userSelect = 'none';
+                e.preventDefault();
             });
 
-            dropzone.addEventListener('dragenter', highlight);
-            dropzone.addEventListener('dragover', highlight);
-            dropzone.addEventListener('dragleave', unhighlight);
-            dropzone.addEventListener('drop', (evt) => {
-                unhighlight(evt);
-                handleDrop(evt);
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+
+                // 上にドラッグすると大きくなる（マイナス方向）
+                const deltaY = startY - e.clientY;
+                const newHeight = startHeight + deltaY;
+
+                // min-heightとmax-heightの制約を適用
+                const minHeight = 120;
+                const maxHeight = window.innerHeight * 0.6;
+                const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
+
+                messageInput.style.height = constrainedHeight + 'px';
             });
 
-            fileInput.addEventListener('change', (evt) => {
-                const files = evt.target.files;
-                if (files?.length) {
-                    uploadArtifacts(files);
-                    fileInput.value = '';
+            document.addEventListener('mouseup', () => {
+                if (isResizing) {
+                    isResizing = false;
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
                 }
             });
 
-            updateDropzoneState();
+            // タッチデバイス対応
+            resizeHandle.addEventListener('touchstart', (e) => {
+                isResizing = true;
+                startY = e.touches[0].clientY;
+                startHeight = messageInput.offsetHeight;
+                e.preventDefault();
+            }, { passive: false });
 
-            return updateDropzoneState;
-        }
+            document.addEventListener('touchmove', (e) => {
+                if (!isResizing) return;
 
-        async function uploadArtifacts(fileList) {
-            if (!currentThreadId || isUploadingArtifacts) return;
+                const deltaY = startY - e.touches[0].clientY;
+                const newHeight = startHeight + deltaY;
 
-            const filesArray = Array.isArray(fileList) ? fileList : Array.from(fileList || []);
-            if (!filesArray.length) return;
+                const minHeight = 120;
+                const maxHeight = window.innerHeight * 0.6;
+                const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
 
-            const { allowed, rejected } = splitFilesByExtension(filesArray);
+                messageInput.style.height = constrainedHeight + 'px';
+            }, { passive: false });
 
-            if (rejected.length) {
-                const rejectedNames = rejected.map(file => `・${file.name}`).join('\n');
-                alert(`テキスト以外の拡張子、または拡張子が未設定のファイルはアップロードできません。\nスキップされたファイル:\n${rejectedNames}\n\n対応している拡張子:\n${ALLOWED_TEXT_EXTENSIONS_MESSAGE}`);
-            }
-
-            if (!allowed.length) {
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('threadId', currentThreadId);
-
-            const metadataMap = {};
-            allowed.forEach((file) => {
-                formData.append('files', file);
-                metadataMap[file.name] = {
-                    description: `Uploaded via UI at ${new Date().toISOString()}`
-                };
+            document.addEventListener('touchend', () => {
+                if (isResizing) {
+                    isResizing = false;
+                }
             });
-            formData.append('metadata', JSON.stringify(metadataMap));
-
-            isUploadingArtifacts = true;
-            artifactDropzoneUpdater?.();
-
-            const dropzone = document.getElementById('artifactDropzone');
-            const artifactsList = document.getElementById('artifactsList');
-            const statusLabel = dropzone?.querySelector('#artifactDropzoneLabel');
-            const originalLabel = statusLabel?.textContent;
-
-            try {
-                statusLabel.textContent = `アップロード中 (${allowed.length} ファイル)...`;
-                const response = await fetch('./api/artifacts/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const result = await response.json();
-                const { results = [] } = result;
-                if (!response.ok && response.status !== 207) throw new Error('アップロードに失敗しました');
-
-                const errors = results.filter(item => item.error);
-                if (errors.length) {
-                    console.warn('一部のファイルが失敗:', errors);
-                    alert(`一部のファイルでエラーが発生しました。\n${errors.map(err => `${err.originalName}: ${err.error}`).join('\n')}`);
-                } else {
-                    alert('ファイルをアップロードしました');
-                }
-
-                await Promise.all([
-                    loadArtifacts(),
-                    fetchSystemPrompt()
-                ]);
-            } catch (error) {
-                console.error('uploadArtifacts error:', error);
-                alert(error.message || 'アップロードに失敗しました');
-                if (artifactsList) {
-                    artifactsList.innerHTML = '<div style="padding: 20px; text-align: center; color: #ff6666;">アップロードエラーが発生しました</div>';
-                }
-            } finally {
-                isUploadingArtifacts = false;
-                if (statusLabel) statusLabel.textContent = originalLabel;
-                artifactDropzoneUpdater?.();
-            }
-        }
-
-        function showUsageLimitPopup() {
-            alert('そろそろ24hの無料利用枠を超えるので、しばらく待ってね！');
         }
 
         async function init() {
@@ -1362,9 +1408,13 @@
 
             artifactDropzoneUpdater = initArtifactDropzone();
             handleResponsiveSidebarState();
-            window.addEventListener('resize', handleResponsiveSidebarState);
+            handleMobileFoldState({ forceCollapse: true });
+            initResizeHandle();
+            window.addEventListener('resize', () => {
+                handleResponsiveSidebarState();
+                handleMobileFoldState();
+            });
         }
-
 
         async function loadModels() {
             try {
@@ -1534,11 +1584,12 @@
                 if (window.innerWidth <= 1024) {
                     closeSidebars();
                 }
+                updateMobileToggleIndicators();
             } catch (error) {
                 console.error('Failed to load thread:', error);
             }
         }
-
+        
         function formatMarkdownText(text) {
             if (!text) return '';
 
@@ -1677,6 +1728,168 @@
                 console.error('Failed to save system prompt:', error);
                 alert('システムプロンプトの保存に失敗しました');
             }
+        }
+
+        function getFileExtension(filename = '') {
+            const lastDot = filename.lastIndexOf('.');
+            if (lastDot === -1) return '';
+            return filename.slice(lastDot).toLowerCase();
+        }
+
+        function isAllowedTextExtension(filename = '') {
+            const ext = getFileExtension(filename);
+            if (!ext) return false;
+            return ALLOWED_TEXT_EXTENSIONS.has(ext);
+        }
+
+        function splitFilesByExtension(files = []) {
+            const allowed = [];
+            const rejected = [];
+            files.forEach((file) => {
+                if (isAllowedTextExtension(file.name)) {
+                    allowed.push(file);
+                } else {
+                    rejected.push(file);
+                }
+            });
+            return { allowed, rejected };
+        }
+
+        function initArtifactDropzone() {
+            const dropzone = document.getElementById('artifactDropzone');
+            const fileInput = document.getElementById('artifactFileInput');
+
+            if (!dropzone || !fileInput) return;
+
+            const updateDropzoneState = () => {
+                dropzone.classList.toggle('disabled', !currentThreadId || isUploadingArtifacts);
+                dropzone.querySelector('#artifactDropzoneLabel').textContent =
+                    !currentThreadId ? 'スレッドを選択してください' :
+                    isUploadingArtifacts ? 'アップロード中...' :
+                    DROPZONE_TEXT_DEFAULT;
+            };
+
+            const highlight = (evt) => {
+                evt.preventDefault();
+                if (!currentThreadId || isUploadingArtifacts) return;
+                dropzone.classList.add('dragover');
+            };
+
+            const unhighlight = (evt) => {
+                evt.preventDefault();
+                dropzone.classList.remove('dragover');
+            };
+
+            const handleDrop = (evt) => {
+                evt.preventDefault();
+                if (!currentThreadId || isUploadingArtifacts) return;
+                const files = evt.dataTransfer?.files;
+                if (files?.length) {
+                    uploadArtifacts(files);
+                }
+            };
+
+            dropzone.addEventListener('click', () => {
+                if (!currentThreadId || isUploadingArtifacts) return;
+                fileInput.click();
+            });
+
+            dropzone.addEventListener('dragenter', highlight);
+            dropzone.addEventListener('dragover', highlight);
+            dropzone.addEventListener('dragleave', unhighlight);
+            dropzone.addEventListener('drop', (evt) => {
+                unhighlight(evt);
+                handleDrop(evt);
+            });
+
+            fileInput.addEventListener('change', (evt) => {
+                const files = evt.target.files;
+                if (files?.length) {
+                    uploadArtifacts(files);
+                    fileInput.value = '';
+                }
+            });
+
+            updateDropzoneState();
+
+            return updateDropzoneState;
+        }
+
+        async function uploadArtifacts(fileList) {
+            if (!currentThreadId || isUploadingArtifacts) return;
+
+            const filesArray = Array.isArray(fileList) ? fileList : Array.from(fileList || []);
+            if (!filesArray.length) return;
+
+            const { allowed, rejected } = splitFilesByExtension(filesArray);
+
+            if (rejected.length) {
+                const rejectedNames = rejected.map(file => `・${file.name}`).join('\n');
+                alert(`テキスト以外の拡張子、または拡張子が未設定のファイルはアップロードできません。\nスキップされたファイル:\n${rejectedNames}\n\n対応している拡張子:\n${ALLOWED_TEXT_EXTENSIONS_MESSAGE}`);
+            }
+
+            if (!allowed.length) {
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('threadId', currentThreadId);
+
+            const metadataMap = {};
+            allowed.forEach((file) => {
+                formData.append('files', file);
+                metadataMap[file.name] = {
+                    description: `Uploaded via UI at ${new Date().toISOString()}`
+                };
+            });
+            formData.append('metadata', JSON.stringify(metadataMap));
+
+            isUploadingArtifacts = true;
+            artifactDropzoneUpdater?.();
+
+            const dropzone = document.getElementById('artifactDropzone');
+            const artifactsList = document.getElementById('artifactsList');
+            const statusLabel = dropzone?.querySelector('#artifactDropzoneLabel');
+            const originalLabel = statusLabel?.textContent;
+
+            try {
+                statusLabel.textContent = `アップロード中 (${allowed.length} ファイル)...`;
+                const response = await fetch('./api/artifacts/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                const { results = [] } = result;
+                if (!response.ok && response.status !== 207) throw new Error('アップロードに失敗しました');
+
+                const errors = results.filter(item => item.error);
+                if (errors.length) {
+                    console.warn('一部のファイルが失敗:', errors);
+                    alert(`一部のファイルでエラーが発生しました。\n${errors.map(err => `${err.originalName}: ${err.error}`).join('\n')}`);
+                } else {
+                    alert('ファイルをアップロードしました');
+                }
+
+                await Promise.all([
+                    loadArtifacts(),
+                    fetchSystemPrompt()
+                ]);
+            } catch (error) {
+                console.error('uploadArtifacts error:', error);
+                alert(error.message || 'アップロードに失敗しました');
+                if (artifactsList) {
+                    artifactsList.innerHTML = '<div style="padding: 20px; text-align: center; color: #ff6666;">アップロードエラーが発生しました</div>';
+                }
+            } finally {
+                isUploadingArtifacts = false;
+                if (statusLabel) statusLabel.textContent = originalLabel;
+                artifactDropzoneUpdater?.();
+            }
+        }
+
+        function showUsageLimitPopup() {
+            alert('そろそろ24hの無料利用枠を超えるので、しばらく待ってね！');
         }
 
         async function sendMessage(event) {
@@ -2007,6 +2220,75 @@
         function handleResponsiveSidebarState() {
             if (window.innerWidth > 1024) {
                 document.body.classList.remove('show-left-sidebar', 'show-right-sidebar', 'sidebar-open');
+            }
+        }
+
+        function toggleMobileHeader() {
+            if (window.innerWidth > MOBILE_BREAKPOINT) return;
+            const chatHeader = document.querySelector('.chat-header');
+            if (!chatHeader) return;
+            chatHeader.classList.toggle('collapsed');
+            updateMobileToggleIndicators();
+        }
+
+        function toggleMobileInput() {
+            if (window.innerWidth > MOBILE_BREAKPOINT) return;
+            const inputArea = document.querySelector('.input-area');
+            if (!inputArea) return;
+            const isCollapsed = inputArea.classList.toggle('collapsed');
+            updateMobileToggleIndicators();
+            if (!isCollapsed) {
+                document.getElementById('messageInput')?.focus();
+            }
+        }
+
+        function handleMobileFoldState({ forceCollapse = false } = {}) {
+            const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
+            const chatHeader = document.querySelector('.chat-header');
+            const inputArea = document.querySelector('.input-area');
+
+            if (isMobile) {
+                if (forceCollapse || isMobileViewport !== true) {
+                    chatHeader?.classList.add('collapsed');
+                    inputArea?.classList.add('collapsed');
+                }
+            } else {
+                chatHeader?.classList.remove('collapsed');
+                inputArea?.classList.remove('collapsed');
+            }
+
+            isMobileViewport = isMobile;
+            updateMobileToggleIndicators();
+        }
+
+        function updateMobileToggleIndicators() {
+            const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
+            const chatHeader = document.querySelector('.chat-header');
+            const headerToggle = document.getElementById('mobileHeaderToggle');
+            if (chatHeader && headerToggle) {
+                const collapsed = chatHeader.classList.contains('collapsed');
+                headerToggle.setAttribute('aria-expanded', (!collapsed).toString());
+                const headerLabel = headerToggle.querySelector('.toggle-label');
+                if (headerLabel) {
+                    headerLabel.textContent = collapsed ? 'ヘッダーを開く' : 'ヘッダーを閉じる';
+                }
+                if (!isMobile) {
+                    headerToggle.setAttribute('aria-expanded', 'true');
+                }
+            }
+
+            const inputArea = document.querySelector('.input-area');
+            const inputToggle = document.getElementById('mobileInputToggle');
+            if (inputArea && inputToggle) {
+                const collapsed = inputArea.classList.contains('collapsed');
+                inputToggle.setAttribute('aria-expanded', (!collapsed).toString());
+                const inputLabel = inputToggle.querySelector('.toggle-label');
+                if (inputLabel) {
+                    inputLabel.textContent = collapsed ? '入力欄を開く' : '入力欄を閉じる';
+                }
+                if (!isMobile) {
+                    inputToggle.setAttribute('aria-expanded', 'true');
+                }
             }
         }
 
