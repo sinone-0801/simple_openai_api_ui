@@ -15,7 +15,8 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: #1a1a1a;
             color: #e0e0e0;
-            height: 100vh;
+            height: 100vh; /* フォールバック */
+            height: 100dvh; /* 動的なビューポート高さ（モバイルのUIを考慮） */
             overflow: hidden;
             display: flex;
         }
@@ -1360,6 +1361,7 @@
                 const maxHeight = window.innerHeight * 0.6;
                 const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
 
+                messageInput.style.flex = 'none';
                 messageInput.style.height = constrainedHeight + 'px';
             });
 
@@ -1389,6 +1391,7 @@
                 const maxHeight = window.innerHeight * 0.6;
                 const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
 
+                messageInput.style.flex = 'none';
                 messageInput.style.height = constrainedHeight + 'px';
             }, { passive: false });
 
