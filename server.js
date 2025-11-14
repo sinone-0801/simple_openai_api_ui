@@ -459,7 +459,7 @@ async function writeThreads(data) {
 }
 
 async function readThread(threadId) {
-  const threadPath = path.join(DATA_DIR, `${threadId}.json`);
+  const threadPath = path.join(DATA_DIR, `thread_${threadId}.json`);
   try {
     const data = await fs.readFile(threadPath, 'utf-8');
     const thread = JSON.parse(data);
