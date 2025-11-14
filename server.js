@@ -7,6 +7,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import * as auth from './auth.js';
 import * as payment from './payment.js';
 
@@ -106,6 +107,15 @@ if (!process.env.OPENAI_API_KEY) {
   console.error('Please set OPENAI_API_KEY before starting the server.');
   process.exit(1);
 }
+
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('ERROR: JWT_SECRET is not set in environment variables');
+  console.error('Please set JWT_SECRET before starting the server.');
+  process.exit(1);
+}
+
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -252,6 +262,23 @@ async function logTokenUsage(model, usage, userId = null) {
       console.error('Failed to record credit usage:', error);
     }
   }
+}
+
+function createAccessToken(user) {
+  if (!user || !user.user_id) {
+    throw new Error('Invalid user payload for token generation');
+  }
+
+  return jwt.sign(
+    {
+      sub: user.user_id,
+      authority: user.authority,
+      remaining_credit: user.remaining_credit,
+      is_active: user.isActive
+    },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+  );
 }
 
 // ====================
