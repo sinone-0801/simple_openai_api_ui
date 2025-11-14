@@ -172,7 +172,6 @@ const AVAILABLE_MODELS_LOW_COST = [
   'o1-mini',
   'o3-mini',
   'o4-mini',
-  'codex-mini-latest'
 ];
 
 const REASONING_MODELS = [
@@ -188,7 +187,6 @@ const REASONING_MODELS = [
   'o1-mini',
   'o3-mini',
   'o4-mini',
-  'codex-mini-latest'
 ];
 
 const NON_REASONING_MODELS = [
