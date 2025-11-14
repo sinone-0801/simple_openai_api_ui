@@ -297,19 +297,19 @@ export async function deleteAccount(adminUserId, targetUserId) {
 }
 
 // クレジット使用量の記録
-export async function recordCreditUsage(userId, tokens) {
+export async function recordCreditUsage(userId, credits) {
   const user = await getUser(userId);
   if (!user) {
     throw new Error('User not found');
   }
 
   await db.run(`
-    UPDATE users 
-    SET used_credit = used_credit + ?, 
+    UPDATE users
+    SET used_credit = used_credit + ?,
         remaining_credit = remaining_credit - ?,
-        updated_at = CURRENT_TIMESTAMP 
+        updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
-  `, [tokens, tokens, userId]);
+  `, [credits, credits, userId]);
 
   return getUser(userId);
 }

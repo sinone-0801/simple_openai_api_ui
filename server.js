@@ -128,6 +128,10 @@ const upload = multer({
 // デフォルトモデルの設定
 const DEFAULT_MODEL = process.env.ORCHESTRATOR_MODEL || 'gpt-5-codex';
 
+// トークンコストの設定（.envから読み込み）
+const TOKEN_COST_HIGH = parseInt(process.env.TOKEN_COST_HIGH) || 10;
+const TOKEN_COST_LOW = parseInt(process.env.TOKEN_COST_LOW) || 1;
+
 // 利用可能なモデルのリスト
 const AVAILABLE_MODELS = [
   'gpt-5.1',
@@ -251,11 +255,18 @@ async function logTokenUsage(model, usage, userId = null) {
   const timestamp = now.toISOString();
   const logEntry = `${timestamp},${model},${usage.input_tokens || 0},${usage.output_tokens || 0},${usage.total_tokens || 0},${userId || 'anonymous'}\n`;
   await fs.appendFile(TOKEN_LOG_FILE, logEntry);
-  
+
   // ユーザーのクレジット使用量を記録
   if (userId && usage.total_tokens) {
     try {
-      await auth.recordCreditUsage(userId, usage.total_tokens);
+      // モデルに応じたクレジット消費量を計算
+      const isHighCostModel = AVAILABLE_MODELS_HIGH_COST.includes(model);
+      const tokenCostRate = isHighCostModel ? TOKEN_COST_HIGH : TOKEN_COST_LOW;
+      const creditsToConsume = usage.total_tokens * tokenCostRate;
+
+      console.log(`[Credit] User: ${userId}, Model: ${model} (${isHighCostModel ? 'High' : 'Low'} cost), Tokens: ${usage.total_tokens}, Rate: ${tokenCostRate}, Credits consumed: ${creditsToConsume}`);
+
+      await auth.recordCreditUsage(userId, creditsToConsume);
     } catch (error) {
       console.error('Failed to record credit usage:', error);
     }
@@ -1167,7 +1178,7 @@ app.get('/api/token-usage/stats', requireAuth, async (req, res) => {
 // ====================
 
 // メッセージ送信と応答生成
-app.post('/api/threads/:threadId/messages', requireAuth, async (req, res) => {
+app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req, res) => {
   try {
     const { threadId } = req.params;
     const { content, model } = req.body;
