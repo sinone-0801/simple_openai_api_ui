@@ -1309,6 +1309,148 @@
     </div>
 
     <script>
+        // ====================
+        // 認証機能
+        // ====================
+        
+        // トークン取得
+        function getAuthToken() {
+            return localStorage.getItem('authToken');
+        }
+
+        // 認証ヘッダーを取得
+        function getAuthHeaders() {
+            const token = getAuthToken();
+            if (!token) {
+                return {};
+            }
+            return {
+                'Authorization': `Bearer ${token}`
+            };
+        }
+
+        // 認証チェック
+        async function checkAuth() {
+            const token = getAuthToken();
+            
+            if (!token) {
+                redirectToLogin();
+                return false;
+            }
+
+            try {
+                const response = await fetch('./api/auth/me', {
+                    headers: getAuthHeaders()
+                });
+
+                if (!response.ok) {
+                    throw new Error('Authentication failed');
+                }
+
+                const data = await response.json();
+                console.log('Logged in as:', data.user.user_id);
+                
+                // ユーザー情報を表示（オプション）
+                updateUserInfo(data.user);
+                
+                return true;
+            } catch (error) {
+                console.error('Auth check failed:', error);
+                redirectToLogin();
+                return false;
+            }
+        }
+
+        // ログインページにリダイレクト
+        function redirectToLogin() {
+            const currentUrl = encodeURIComponent(window.location.pathname + window.location.search);
+            window.location.href = `./login.html?return=${currentUrl}`;
+        }
+
+        // ログアウト
+        function logout() {
+            if (confirm('ログアウトしますか？')) {
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('userId');
+                redirectToLogin();
+            }
+        }
+
+        // ユーザー情報を表示
+        function updateUserInfo(user) {
+            // サイドバーヘッダーにユーザー情報を追加
+            const sidebarHeader = document.querySelector('.sidebar-header');
+            if (sidebarHeader && !document.getElementById('userInfo')) {
+                const userInfoDiv = document.createElement('div');
+                userInfoDiv.id = 'userInfo';
+                userInfoDiv.style.cssText = 'margin-top: 15px; padding: 10px; background: #333; border-radius: 6px; font-size: 12px;';
+                
+                userInfoDiv.innerHTML = `
+                    <div style="color: #999; margin-bottom: 4px;">ログイン中</div>
+                    <div style="color: #e0e0e0; font-weight: 500; margin-bottom: 8px;">${user.user_id}</div>
+                    <div style="color: #999; font-size: 11px; margin-bottom: 8px;">残クレジット: ${user.remaining_credit?.toLocaleString() || '0'}</div>
+                    <button onclick="logout()" style="width: 100%; padding: 6px; background: #444; border: none; border-radius: 4px; color: #e0e0e0; cursor: pointer; font-size: 12px;">
+                        ログアウト
+                    </button>
+                `;
+                
+                sidebarHeader.appendChild(userInfoDiv);
+            }
+        }
+
+        // 401エラーのハンドリング
+        function handleUnauthorized() {
+            console.warn('Unauthorized access detected');
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('userId');
+            redirectToLogin();
+        }
+
+        // グローバルfetchをラップ（認証が必要なAPIリクエストのみ）
+        const originalFetch = window.fetch;
+        
+        // fetchのラッパー関数（認証ヘッダーを自動追加）
+        async function authenticatedFetch(url, options = {}) {
+            const authHeaders = getAuthHeaders();
+            const headers = {
+                ...authHeaders,
+                ...(options.headers || {})
+            };
+
+            // fetch()ではなくoriginalFetch()を使用
+            const response = await originalFetch(url, {
+                ...options,
+                headers
+            });
+
+            // 401エラーの場合はログインページにリダイレクト
+            if (response.status === 401) {
+                handleUnauthorized();
+                throw new Error('Unauthorized');
+            }
+
+            return response;
+        }
+
+        // window.fetchを上書き
+        window.fetch = async function(url, options = {}) {
+            // 相対URLまたは同じオリジンのAPIリクエストの場合は認証ヘッダーを追加
+            if (typeof url === 'string' && (url.startsWith('./api/') || url.startsWith('/api/'))) {
+                try {
+                    return await authenticatedFetch(url, options);
+                } catch (error) {
+                    // 認証エラーの場合はエラーをスロー（呼び出し側でハンドリング可能に）
+                    throw error;
+                }
+            }
+            // それ以外は通常のfetch
+            return originalFetch(url, options);
+        };
+
+        // ====================
+        // アプリケーション本体
+        // ====================
+        
         const ALLOWED_TEXT_EXTENSIONS = new Set([
             '.txt', '.md', '.markdown', '.json', '.json5', '.js', '.mjs', '.cjs', '.ts', '.tsx',
             '.jsx', '.css', '.scss', '.sass', '.less', '.html', '.htm', '.xml', '.svg', '.yml', '.yaml',
@@ -1403,6 +1545,12 @@
         }
 
         async function init() {
+            // 認証チェック（最初に実行）
+            const isAuthenticated = await checkAuth();
+            if (!isAuthenticated) {
+                return; // 認証失敗時はここで終了（リダイレクトされる）
+            }
+
             await loadThreads();
             await loadModels();
             await loadTokenUsage();
@@ -1538,7 +1686,23 @@
         async function loadThread(threadId) {
             try {
                 const response = await fetch(`./api/threads/${threadId}`);
+                
+                // レスポンスが正常でない場合はエラー処理
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('Failed to load thread:', errorData.error || 'Unknown error');
+                    alert(`スレッドの読み込みに失敗しました: ${errorData.error || 'Unknown error'}`);
+                    return;
+                }
+                
                 const thread = await response.json();
+                
+                // スレッドデータの検証
+                if (!thread || !thread.messages) {
+                    console.error('Invalid thread data:', thread);
+                    alert('スレッドデータが不正です');
+                    return;
+                }
                 
                 currentThreadId = threadId;
                 document.getElementById('chatTitle').textContent = thread.title;
@@ -1590,6 +1754,7 @@
                 updateMobileToggleIndicators();
             } catch (error) {
                 console.error('Failed to load thread:', error);
+                alert(`スレッドの読み込み中にエラーが発生しました: ${error.message}`);
             }
         }
         

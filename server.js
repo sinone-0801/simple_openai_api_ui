@@ -7,11 +7,93 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import * as auth from './auth.js';
+import * as payment from './payment.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+
+// ====================
+// 支払い・クレジット購入 API
+// ====================
+
+// 購入設定の取得
+app.get('/api/payment/config', requireAuth, (req, res) => {
+  try {
+    const config = payment.getPaymentConfig();
+    res.json(config);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Stripe Checkoutセッションの作成
+app.post('/api/payment/create-checkout', requireAuth, async (req, res) => {
+  try {
+    const { amount, credits } = req.body;
+
+    if (!amount || !credits) {
+      return res.status(400).json({ error: 'Amount and credits are required' });
+    }
+
+    // 成功・キャンセルのURL
+    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+    const successUrl = `${baseUrl}/success.html`;
+    const cancelUrl = `${baseUrl}/cancel.html`;
+
+    // Checkoutセッション作成
+    const session = await payment.createCheckoutSession({
+      userId: req.user.user_id,
+      amount,
+      credits,
+      successUrl,
+      cancelUrl
+    });
+
+    res.json({ url: session.url, sessionId: session.id });
+  } catch (error) {
+    console.error('Create checkout error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Stripe Webhookエンドポイント（重要: express.json()の前に配置が必要）
+// このエンドポイントは app.use(express.json()) より前に配置すること
+app.post('/api/payment/webhook', 
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    try {
+      const signature = req.headers['stripe-signature'];
+      
+      if (!signature) {
+        return res.status(400).json({ error: 'Missing stripe-signature header' });
+      }
+
+      // Webhookの処理
+      await payment.handleWebhook(req.body, signature);
+      
+      res.json({ received: true });
+    } catch (error) {
+      console.error('Webhook error:', error);
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+// 購入履歴の取得（将来の実装用）
+app.get('/api/payment/history', requireAuth, async (req, res) => {
+  try {
+    const history = await payment.getPurchaseHistory(req.user.user_id);
+    res.json({ history });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ※ 購入関連の API は app.use(express.json()); より上に配置すること
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -38,6 +120,8 @@ const DEFAULT_MODEL = process.env.ORCHESTRATOR_MODEL || 'gpt-5-codex';
 
 // 利用可能なモデルのリスト
 const AVAILABLE_MODELS = [
+  'gpt-5.1',
+  'gpt-5.1-codex',
   'gpt-5',
   'gpt-5-codex',
   'gpt-5-chat-latest',
@@ -45,6 +129,7 @@ const AVAILABLE_MODELS = [
   'gpt-4o',
   'o1',
   'o3',
+  'gpt-5.1-codex-mini',
   'gpt-5-mini',
   'gpt-5-nano',
   'gpt-4.1-mini',
@@ -53,10 +138,11 @@ const AVAILABLE_MODELS = [
   'o1-mini',
   'o3-mini',
   'o4-mini',
-  'codex-mini-latest'
 ];
 
 const AVAILABLE_MODELS_HIGH_COST = [
+  'gpt-5.1',
+  'gpt-5.1-codex',
   'gpt-5',
   'gpt-5-codex',
   'gpt-5-chat-latest',
@@ -67,6 +153,7 @@ const AVAILABLE_MODELS_HIGH_COST = [
 ];
 
 const AVAILABLE_MODELS_LOW_COST = [
+  'gpt-5.1-codex-mini',
   'gpt-5-mini',
   'gpt-5-nano',
   'gpt-4.1-mini',
@@ -79,9 +166,11 @@ const AVAILABLE_MODELS_LOW_COST = [
 ];
 
 const REASONING_MODELS = [
+  'gpt-5.1',
+  'gpt-5.1-codex',
+  'gpt-5.1-codex-mini',
   'gpt-5',
   'gpt-5-codex',
-  'gpt-5-chat-latest',
   'o1',
   'o3',
   'gpt-5-mini',
@@ -93,6 +182,7 @@ const REASONING_MODELS = [
 ];
 
 const NON_REASONING_MODELS = [
+  'gpt-5-chat-latest',
   'gpt-4.1',
   'gpt-4o',
   'gpt-4.1-mini',
@@ -129,6 +219,9 @@ const TOKEN_LOG_FILE = path.join(DATA_DIR, 'token_usage.csv');
 await fs.mkdir(DATA_DIR, { recursive: true });
 await fs.mkdir(ARTIFACTS_DIR, { recursive: true });
 
+// データベースの初期化
+await auth.initDatabase();
+
 const INVALID_FILENAME_CHARS_REGEX = /[\\/:*?"<>|]/g;
 const DEFAULT_ARTIFACT_BASENAME = 'artifact';
 
@@ -137,20 +230,108 @@ async function initTokenLog() {
   try {
     await fs.access(TOKEN_LOG_FILE);
   } catch {
-    await fs.writeFile(TOKEN_LOG_FILE, 'timestamp,model,input_tokens,output_tokens,total_tokens\n');
+    await fs.writeFile(TOKEN_LOG_FILE, 'timestamp,model,input_tokens,output_tokens,total_tokens,user_id\n');
   }
 }
 
 await initTokenLog();
 
 // トークン使用量をログに記録
-async function logTokenUsage(model, usage) {
+async function logTokenUsage(model, usage, userId = null) {
   if (!usage) return;
   const now = new Date();
   const timestamp = now.toISOString();
-  const logEntry = `${timestamp},${model},${usage.input_tokens || 0},${usage.output_tokens || 0},${usage.total_tokens || 0}\n`;
+  const logEntry = `${timestamp},${model},${usage.input_tokens || 0},${usage.output_tokens || 0},${usage.total_tokens || 0},${userId || 'anonymous'}\n`;
   await fs.appendFile(TOKEN_LOG_FILE, logEntry);
+  
+  // ユーザーのクレジット使用量を記録
+  if (userId && usage.total_tokens) {
+    try {
+      await auth.recordCreditUsage(userId, usage.total_tokens);
+    } catch (error) {
+      console.error('Failed to record credit usage:', error);
+    }
+  }
 }
+
+// ====================
+// 認証ミドルウェア
+// ====================
+
+// 認証ミドルウェア（必須）
+async function requireAuth(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader) {
+      return res.status(401).json({ error: 'Authorization header required' });
+    }
+
+    // Bearer トークン形式: "Bearer userId:password" または "Bearer userId:groupId:group"
+    const token = authHeader.replace('Bearer ', '');
+    const parts = token.split(':');
+    
+    if (parts.length < 2) {
+      return res.status(401).json({ error: 'Invalid token format' });
+    }
+
+    let user = null;
+    const [userId, credential, type] = parts;
+
+    // 認証方式の判定
+    if (type === 'group' && parts.length === 3) {
+      // UserID + GroupID認証
+      user = await auth.authenticateWithGroup(userId, credential);
+    } else {
+      // UserID + Password認証
+      user = await auth.authenticateWithPassword(userId, credential);
+    }
+
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // リクエストにユーザー情報を添付
+    req.user = user;
+    next();
+  } catch (error) {
+    if (error.message.includes('stopped') || error.message.includes('banned')) {
+      return res.status(403).json({ error: error.message });
+    }
+    return res.status(401).json({ error: 'Authentication failed' });
+  }
+}
+
+// Admin権限チェックミドルウェア
+async function requireAdmin(req, res, next) {
+  if (!req.user || req.user.authority !== auth.Authority.ADMIN) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+}
+
+// クレジット残高チェックミドルウェア
+async function checkCredit(req, res, next) {
+  const user = req.user;
+  
+  if (user.authority === auth.Authority.ADMIN || user.authority === auth.Authority.VIP) {
+    // AdminとVIPはクレジットチェックをスキップ
+    return next();
+  }
+
+  if (user.remaining_credit <= 0) {
+    return res.status(402).json({ 
+      error: 'Insufficient credit',
+      remaining_credit: user.remaining_credit
+    });
+  }
+
+  next();
+}
+
+// ====================
+// 主要機能のAPIエンドポイント
+// ====================
 
 // CSVログを読み込んで解析
 async function readTokenLog() {
@@ -159,13 +340,14 @@ async function readTokenLog() {
     const lines = content.trim().split('\n');
     if (lines.length <= 1) return [];
     const data = lines.slice(1).map(line => {
-      const [timestamp, model, input_tokens, output_tokens, total_tokens] = line.split(',');
+      const [timestamp, model, input_tokens, output_tokens, total_tokens, user_id] = line.split(',');
       return {
         timestamp: new Date(timestamp),
         model,
         input_tokens: parseInt(input_tokens) || 0,
         output_tokens: parseInt(output_tokens) || 0,
-        total_tokens: parseInt(total_tokens) || 0
+        total_tokens: parseInt(total_tokens) || 0,
+        user_id: user_id || 'anonymous'
       };
     });
     return data;
@@ -193,14 +375,15 @@ async function compressAndCleanLogs() {
     const dailyAggregated = {};
     oldLogs.forEach(log => {
       const dateKey = toJSTDateString(log.timestamp);
-      const modelKey = `${dateKey}_${log.model}`;
+      const modelKey = `${dateKey}_${log.model}_${log.user_id}`;
       if (!dailyAggregated[modelKey]) {
         dailyAggregated[modelKey] = {
           timestamp: new Date(dateKey + 'T00:00:00Z'),
           model: log.model,
           input_tokens: 0,
           output_tokens: 0,
-          total_tokens: 0
+          total_tokens: 0,
+          user_id: log.user_id
         };
       }
       dailyAggregated[modelKey].input_tokens += log.input_tokens;
@@ -209,9 +392,9 @@ async function compressAndCleanLogs() {
     });
     const compressedLogs = [...Object.values(dailyAggregated), ...recentLogs]
       .sort((a, b) => a.timestamp - b.timestamp);
-    let csvContent = 'timestamp,model,input_tokens,output_tokens,total_tokens\n';
+    let csvContent = 'timestamp,model,input_tokens,output_tokens,total_tokens,user_id\n';
     compressedLogs.forEach(log => {
-      csvContent += `${log.timestamp.toISOString()},${log.model},${log.input_tokens},${log.output_tokens},${log.total_tokens}\n`;
+      csvContent += `${log.timestamp.toISOString()},${log.model},${log.input_tokens},${log.output_tokens},${log.total_tokens},${log.user_id}\n`;
     });
     await fs.writeFile(TOKEN_LOG_FILE, csvContent);
     console.log('Token logs compressed and cleaned');
@@ -224,7 +407,7 @@ setInterval(compressAndCleanLogs, 60 * 60 * 1000);
 compressAndCleanLogs();
 
 // ユーティリティ関数
-async function getTokenUsageSummary(hours = 24) {
+async function getTokenUsageSummary(hours = 24, userId = null) {
   const logs = await readTokenLog();
   const now = new Date();
   const boundary = new Date(now.getTime() - hours * 60 * 60 * 1000);
@@ -236,6 +419,10 @@ async function getTokenUsageSummary(hours = 24) {
 
   for (const log of logs) {
     if (log.timestamp < boundary) continue;
+    
+    // ユーザーIDでフィルタリング（指定された場合）
+    if (userId && log.user_id !== userId) continue;
+    
     if (AVAILABLE_MODELS_HIGH_COST.includes(log.model)) {
       summary.highCost.usage += log.total_tokens;
     } else if (AVAILABLE_MODELS_LOW_COST.includes(log.model)) {
@@ -272,10 +459,12 @@ async function writeThreads(data) {
 }
 
 async function readThread(threadId) {
+  const threadPath = path.join(DATA_DIR, `${threadId}.json`);
   try {
-    const threadFile = path.join(DATA_DIR, `thread_${threadId}.json`);
-    const data = await fs.readFile(threadFile, 'utf-8');
-    return ensureThreadDefaults(JSON.parse(data));
+    const data = await fs.readFile(threadPath, 'utf-8');
+    const thread = JSON.parse(data);
+    thread.artifactIds = Array.isArray(thread.artifactIds) ? thread.artifactIds : [];
+    return thread;
   } catch {
     return null;
   }
@@ -731,7 +920,7 @@ function isReasoningModel(model) {
 // ====================
 
 // スレッド一覧取得
-app.get('/api/threads', async (req, res) => {
+app.get('/api/threads', requireAuth, async (req, res) => {
   try {
     const data = await readThreads();
     res.json({ threads: data.threads });
@@ -741,7 +930,7 @@ app.get('/api/threads', async (req, res) => {
 });
 
 // 特定スレッド取得
-app.get('/api/threads/:threadId', async (req, res) => {
+app.get('/api/threads/:threadId', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.params;
     const thread = await readThread(threadId);
@@ -758,7 +947,7 @@ app.get('/api/threads/:threadId', async (req, res) => {
 });
 
 // 新規スレッド作成
-app.post('/api/threads', async (req, res) => {
+app.post('/api/threads', requireAuth, async (req, res) => {
   try {
     const { title, systemPrompt, model } = req.body;
     const threadId = generateId();
@@ -805,7 +994,7 @@ app.post('/api/threads', async (req, res) => {
 });
 
 // スレッド削除
-app.delete('/api/threads/:threadId', async (req, res) => {
+app.delete('/api/threads/:threadId', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.params;
     
@@ -829,7 +1018,7 @@ app.delete('/api/threads/:threadId', async (req, res) => {
 // ====================
 
 // システムプロンプト取得
-app.get('/api/threads/:threadId/system-prompt', async (req, res) => {
+app.get('/api/threads/:threadId/system-prompt', requireAuth, async (req, res) => {
   try {
     const thread = await readThread(req.params.threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
@@ -845,7 +1034,7 @@ app.get('/api/threads/:threadId/system-prompt', async (req, res) => {
 });
 
 // システムプロンプト更新
-app.put('/api/threads/:threadId/system-prompt', async (req, res) => {
+app.put('/api/threads/:threadId/system-prompt', requireAuth, async (req, res) => {
   try {
     const { systemPrompt } = req.body;
     const thread = await readThread(req.params.threadId);
@@ -869,7 +1058,7 @@ app.put('/api/threads/:threadId/system-prompt', async (req, res) => {
 // ====================
 
 // 利用可能なモデル一覧取得
-app.get('/api/models', (req, res) => {
+app.get('/api/models', requireAuth, (req, res) => {
   res.json({
     defaultModel: DEFAULT_MODEL,
     availableModels: AVAILABLE_MODELS,
@@ -879,7 +1068,7 @@ app.get('/api/models', (req, res) => {
 });
 
 // スレッドのモデル取得
-app.get('/api/threads/:threadId/model', async (req, res) => {
+app.get('/api/threads/:threadId/model', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.params;
     const thread = await readThread(threadId);
@@ -895,7 +1084,7 @@ app.get('/api/threads/:threadId/model', async (req, res) => {
 });
 
 // スレッドのモデル更新
-app.put('/api/threads/:threadId/model', async (req, res) => {
+app.put('/api/threads/:threadId/model', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.params;
     const { model } = req.body;
@@ -926,7 +1115,7 @@ app.put('/api/threads/:threadId/model', async (req, res) => {
 // ====================
 
 // トークン使用量の統計を取得
-app.get('/api/token-usage/stats', async (req, res) => {
+app.get('/api/token-usage/stats', requireAuth, async (req, res) => {
   const summary = await getTokenUsageSummary();
   try {
     res.json({
@@ -953,7 +1142,7 @@ app.get('/api/token-usage/stats', async (req, res) => {
 // ====================
 
 // メッセージ送信と応答生成
-app.post('/api/threads/:threadId/messages', async (req, res) => {
+app.post('/api/threads/:threadId/messages', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.params;
     const { content, model } = req.body;
@@ -1467,54 +1656,6 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                   });
 
                   console.log(`  ✅ Artifact read: ${artifactId} (v${versionData.version})`);
-
-                  // console.log('  📖 Reading artifact...');
-                  // const artifactId = toolInput.artifact_id;
-                  // const requestedVersion = typeof toolInput.version === 'number' ? toolInput.version : null;
-                  // const encoding = toolInput.encoding === 'base64' ? 'base64' : 'utf-8';
-
-                  // const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-                  // const metadataPath = path.join(artifactDir, 'metadata.json');
-                  // const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-                  // const artifactMetadata = JSON.parse(metadataContent);
-
-                  // const versionData = requestedVersion
-                  //   ? artifactMetadata.versions.find(v => v.version === requestedVersion)
-                  //   : artifactMetadata.versions.at(-1);
-
-                  // if (!versionData) {
-                  //   throw new Error(
-                  //     requestedVersion
-                  //       ? `Artifact version ${requestedVersion} not found`
-                  //       : 'No versions found for artifact'
-                  //   );
-                  // }
-
-                  // const filePath = path.join(artifactDir, versionData.filename);
-                  // const fileBuffer = await fs.readFile(filePath);
-                  // const fileContent = encoding === 'base64'
-                  //   ? fileBuffer.toString('base64')
-                  //   : fileBuffer.toString('utf-8');
-
-                  // toolResult = {
-                  //   success: true,
-                  //   artifactId,
-                  //   filename: artifactMetadata.filename,
-                  //   version: versionData.version,
-                  //   encoding,
-                  //   content: fileContent,
-                  //   metadata: versionData.metadata ?? {},
-                  //   message: `Successfully read artifact ${artifactMetadata.filename} (v${versionData.version})`
-                  // };
-
-                  // allToolCalls.push({
-                  //   type: 'read_artifact',
-                  //   name: item.name,
-                  //   input: toolInput,
-                  //   result: toolResult
-                  // });
-
-                  // console.log(`  ✅ Artifact read: ${artifactId} (v${versionData.version})`);
                 } catch (error) {
                   console.error('  ❌ Failed to read artifact:', error);
                   toolResult = {
@@ -1850,7 +1991,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
 });
 
 // メッセージ履歴取得
-app.get('/api/threads/:threadId/messages', async (req, res) => {
+app.get('/api/threads/:threadId/messages', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.params;
     const thread = await readThread(threadId);
@@ -1870,7 +2011,7 @@ app.get('/api/threads/:threadId/messages', async (req, res) => {
 // ====================
 
 // アーティファクト作成
-app.post('/api/artifacts', async (req, res) => {
+app.post('/api/artifacts', requireAuth, async (req, res) => {
   try {
     const { filename, content, metadata, threadId } = req.body;
     const result = await createArtifactRecord({
@@ -1886,7 +2027,7 @@ app.post('/api/artifacts', async (req, res) => {
 });
 
 // アーティファクト取得(最新版)
-app.get('/api/artifacts/:artifactId', async (req, res) => {
+app.get('/api/artifacts/:artifactId', requireAuth, async (req, res) => {
   try {
     const { artifactId } = req.params;
     const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
@@ -1913,7 +2054,7 @@ app.get('/api/artifacts/:artifactId', async (req, res) => {
 });
 
 // アーティファクト取得(特定バージョン)
-app.get('/api/artifacts/:artifactId/v:version', async (req, res) => {
+app.get('/api/artifacts/:artifactId/v:version', requireAuth, async (req, res) => {
   try {
     const { artifactId, version } = req.params;
     const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
@@ -1944,7 +2085,7 @@ app.get('/api/artifacts/:artifactId/v:version', async (req, res) => {
 });
 
 // アーティファクト編集(新バージョン作成)
-app.put('/api/artifacts/:artifactId', async (req, res) => {
+app.put('/api/artifacts/:artifactId', requireAuth, async (req, res) => {
   try {
     const { content, metadata } = req.body ?? {};
 
@@ -1966,7 +2107,7 @@ app.put('/api/artifacts/:artifactId', async (req, res) => {
 });
 
 // アーティファクト削除
-app.delete('/api/artifacts/:artifactId', async (req, res) => {
+app.delete('/api/artifacts/:artifactId', requireAuth, async (req, res) => {
   try {
     const { artifactId } = req.params;
     const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
@@ -1983,7 +2124,7 @@ app.delete('/api/artifacts/:artifactId', async (req, res) => {
 });
 
 // アーティファクト一覧取得
-app.get('/api/artifacts', async (req, res) => {
+app.get('/api/artifacts', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.query;
     const artifactDirs = await fs.readdir(ARTIFACTS_DIR);
@@ -2026,7 +2167,7 @@ app.get('/api/artifacts', async (req, res) => {
 });
 
 // 複数ファイルアップロード
-app.post('/api/artifacts/upload', upload.array('files'), async (req, res) => {
+app.post('/api/artifacts/upload', requireAuth, upload.array('files'), async (req, res) => {
   try {
     if (!req.files?.length) {
       return res.status(400).json({ error: 'ファイルが添付されていません。' });
@@ -2065,6 +2206,203 @@ app.post('/api/artifacts/upload', upload.array('files'), async (req, res) => {
     res.status(hasError ? 207 : 201).json({ results });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ====================
+// 認証・ユーザー管理 API
+// ====================
+
+// ユーザー情報取得
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  try {
+    res.json({ user: req.user });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ログイン（認証テスト）
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { userId, password, groupId } = req.body;
+    
+    let user = null;
+    
+    if (groupId) {
+      user = await auth.authenticateWithGroup(userId, groupId);
+    } else if (password) {
+      user = await auth.authenticateWithPassword(userId, password);
+    } else {
+      return res.status(400).json({ error: 'Password or groupId required' });
+    }
+
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    res.json({ 
+      success: true,
+      user,
+      token: groupId ? `${userId}:${groupId}:group` : `${userId}:${password}`
+    });
+  } catch (error) {
+    if (error.message.includes('stopped') || error.message.includes('banned')) {
+      return res.status(403).json({ error: error.message });
+    }
+    res.status(401).json({ error: 'Authentication failed' });
+  }
+});
+
+// パスワード変更
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+    
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: 'Old and new passwords required' });
+    }
+
+    await auth.changePassword(req.user.user_id, oldPassword, newPassword);
+    
+    res.json({ 
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// ====================
+// Admin専用 API
+// ====================
+
+// 新規ユーザー作成（Admin専用）
+app.post('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { userId, password, groupId, threadId, authority, remainingCredit } = req.body;
+    
+    const user = await auth.createUser({
+      userId,
+      password,
+      groupId,
+      threadId,
+      authority,
+      remainingCredit
+    });
+
+    res.status(201).json({ user });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// 全ユーザー取得（Admin専用）
+app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const users = await auth.getAllUsers();
+    res.json({ users });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ユーザー情報取得（Admin専用）
+app.get('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const user = await auth.getUser(req.params.userId);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ user });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ユーザー情報更新（Admin専用）
+app.put('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const user = await auth.updateUser(req.params.userId, req.body);
+    res.json({ user });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// アカウント停止（Admin専用）
+app.post('/api/admin/users/:userId/stop', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const user = await auth.stopAccount(req.user.user_id, req.params.userId);
+    res.json({ user, message: 'Account stopped successfully' });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// アカウントBAN（Admin専用）
+app.post('/api/admin/users/:userId/ban', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const user = await auth.banAccount(req.user.user_id, req.params.userId);
+    res.json({ user, message: 'Account banned successfully' });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// アカウント復活（Admin専用）
+app.post('/api/admin/users/:userId/reactivate', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { authority } = req.body;
+    const user = await auth.reactivateAccount(req.user.user_id, req.params.userId, authority);
+    res.json({ user, message: 'Account reactivated successfully' });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// アカウント削除（Admin専用）
+app.delete('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const result = await auth.deleteAccount(req.user.user_id, req.params.userId);
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// クレジット追加（Admin専用）
+app.post('/api/admin/users/:userId/credit/add', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: 'Valid amount required' });
+    }
+
+    const user = await auth.addCredit(req.user.user_id, req.params.userId, amount);
+    res.json({ user, message: 'Credit added successfully' });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// クレジットリセット（Admin専用）
+app.post('/api/admin/users/:userId/credit/reset', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    
+    if (typeof amount === 'undefined' || amount < 0) {
+      return res.status(400).json({ error: 'Valid amount required' });
+    }
+
+    const user = await auth.resetCredit(req.user.user_id, req.params.userId, amount);
+    res.json({ user, message: 'Credit reset successfully' });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
   }
 });
 

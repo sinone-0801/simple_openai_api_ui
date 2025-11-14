@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ログイン - OpenAI API UI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 400px;
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .login-header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+
+        .login-header p {
+            font-size: 14px;
+            color: #999;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: #333;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #0066cc;
+        }
+
+        .form-input::placeholder {
+            color: #666;
+        }
+
+        .auth-mode-toggle {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            background: #333;
+            padding: 4px;
+            border-radius: 6px;
+        }
+
+        .auth-mode-btn {
+            flex: 1;
+            padding: 8px 12px;
+            background: transparent;
+            border: none;
+            border-radius: 4px;
+            color: #999;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .auth-mode-btn.active {
+            background: #0066cc;
+            color: #fff;
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 12px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+            margin-top: 24px;
+        }
+
+        .login-btn:hover {
+            background: #0052a3;
+        }
+
+        .login-btn:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        .error-message {
+            background: #ff3333;
+            color: white;
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .help-text {
+            font-size: 12px;
+            color: #999;
+            margin-top: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1>ログイン</h1>
+            <p>アカウント情報を入力してください</p>
+        </div>
+
+        <div id="errorMessage" class="error-message"></div>
+
+        <form id="loginForm">
+            <div class="auth-mode-toggle">
+                <button type="button" class="auth-mode-btn active" data-mode="password">
+                    パスワード認証
+                </button>
+                <button type="button" class="auth-mode-btn" data-mode="group">
+                    グループID認証
+                </button>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="userId">ユーザーID</label>
+                <input 
+                    type="text" 
+                    id="userId" 
+                    class="form-input" 
+                    placeholder="ユーザーIDを入力"
+                    required
+                    autocomplete="username"
+                >
+            </div>
+
+            <div class="form-group" id="passwordGroup">
+                <label class="form-label" for="password">パスワード</label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    class="form-input" 
+                    placeholder="パスワードを入力"
+                    autocomplete="current-password"
+                >
+            </div>
+
+            <div class="form-group hidden" id="groupIdGroup">
+                <label class="form-label" for="groupId">グループID</label>
+                <input 
+                    type="text" 
+                    id="groupId" 
+                    class="form-input" 
+                    placeholder="グループIDを入力"
+                >
+                <div class="help-text">
+                    グループIDでログインする場合に入力してください
+                </div>
+            </div>
+
+            <button type="submit" class="login-btn" id="loginBtn">
+                ログイン
+            </button>
+        </form>
+    </div>
+
+    <script>
+        let currentAuthMode = 'password';
+
+        // 認証モード切り替え
+        document.querySelectorAll('.auth-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const mode = btn.dataset.mode;
+                currentAuthMode = mode;
+
+                // ボタンのアクティブ状態を切り替え
+                document.querySelectorAll('.auth-mode-btn').forEach(b => {
+                    b.classList.toggle('active', b.dataset.mode === mode);
+                });
+
+                // フォームの表示を切り替え
+                const passwordGroup = document.getElementById('passwordGroup');
+                const groupIdGroup = document.getElementById('groupIdGroup');
+                const passwordInput = document.getElementById('password');
+                const groupIdInput = document.getElementById('groupId');
+
+                if (mode === 'password') {
+                    passwordGroup.classList.remove('hidden');
+                    groupIdGroup.classList.add('hidden');
+                    passwordInput.required = true;
+                    groupIdInput.required = false;
+                    groupIdInput.value = '';
+                } else {
+                    passwordGroup.classList.add('hidden');
+                    groupIdGroup.classList.remove('hidden');
+                    passwordInput.required = false;
+                    groupIdInput.required = true;
+                    passwordInput.value = '';
+                }
+            });
+        });
+
+        // エラーメッセージ表示
+        function showError(message) {
+            const errorElement = document.getElementById('errorMessage');
+            errorElement.textContent = message;
+            errorElement.classList.add('show');
+        }
+
+        function hideError() {
+            const errorElement = document.getElementById('errorMessage');
+            errorElement.classList.remove('show');
+        }
+
+        // ログイン処理
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError();
+
+            const userId = document.getElementById('userId').value.trim();
+            const password = document.getElementById('password').value;
+            const groupId = document.getElementById('groupId').value.trim();
+            const loginBtn = document.getElementById('loginBtn');
+
+            if (!userId) {
+                showError('ユーザーIDを入力してください');
+                return;
+            }
+
+            if (currentAuthMode === 'password' && !password) {
+                showError('パスワードを入力してください');
+                return;
+            }
+
+            if (currentAuthMode === 'group' && !groupId) {
+                showError('グループIDを入力してください');
+                return;
+            }
+
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'ログイン中...';
+
+            try {
+                const requestBody = { userId };
+                if (currentAuthMode === 'password') {
+                    requestBody.password = password;
+                } else {
+                    requestBody.groupId = groupId;
+                }
+
+                const response = await fetch('./api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'ログインに失敗しました');
+                }
+
+                // トークンをlocalStorageに保存
+                localStorage.setItem('authToken', data.token);
+                localStorage.setItem('userId', data.user.user_id);
+
+                // index.htmlにリダイレクト
+                // URLパラメータで戻り先を指定できる場合はそこに戻る
+                const urlParams = new URLSearchParams(window.location.search);
+                const returnUrl = urlParams.get('return') || './index.html';
+                window.location.href = returnUrl;
+
+            } catch (error) {
+                console.error('Login error:', error);
+                showError(error.message);
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'ログイン';
+            }
+        });
+
+        // 【修正】既存トークンの検証付きリダイレクト
+        async function checkExistingAuth() {
+            const token = localStorage.getItem('authToken');
+            
+            if (!token) {
+                return; // トークンがない場合は何もしない
+            }
+
+            try {
+                // トークンの有効性を確認
+                const response = await fetch('./api/auth/me', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.ok) {
+                    // トークンが有効な場合はリダイレクト
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const returnUrl = urlParams.get('return') || './index.html';
+                    window.location.href = returnUrl;
+                } else {
+                    // トークンが無効な場合は削除
+                    console.warn('Stored token is invalid, removing...');
+                    localStorage.removeItem('authToken');
+                    localStorage.removeItem('userId');
+                }
+            } catch (error) {
+                // エラーが発生した場合もトークンを削除
+                console.error('Auth check error:', error);
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('userId');
+            }
+        }
+
+        // ページ読み込み時に既存認証をチェック
+        checkExistingAuth();
+    </script>
+</body>
+</html>

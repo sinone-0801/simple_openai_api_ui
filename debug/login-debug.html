@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ログイン（デバッグ版） - OpenAI API UI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .login-container {
+            width: 400px;
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            height: fit-content;
+        }
+
+        .debug-panel {
+            flex: 1;
+            background: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            border-radius: 12px;
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 90vh;
+        }
+
+        .debug-panel h2 {
+            color: #0066cc;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        .debug-log {
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            background: #000;
+            padding: 15px;
+            border-radius: 6px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 600px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+        }
+
+        .debug-log .timestamp {
+            color: #666;
+        }
+
+        .debug-log .info {
+            color: #4CAF50;
+        }
+
+        .debug-log .error {
+            color: #ff3333;
+        }
+
+        .debug-log .warn {
+            color: #ff9800;
+        }
+
+        .debug-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #2a2a2a;
+            border-radius: 6px;
+        }
+
+        .debug-section h3 {
+            color: #999;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .debug-value {
+            color: #e0e0e0;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            padding: 8px;
+            background: #000;
+            border-radius: 4px;
+            margin-top: 5px;
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .login-header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+
+        .login-header p {
+            font-size: 14px;
+            color: #999;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: #333;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #0066cc;
+        }
+
+        .auth-mode-toggle {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            background: #333;
+            padding: 4px;
+            border-radius: 6px;
+        }
+
+        .auth-mode-btn {
+            flex: 1;
+            padding: 8px 12px;
+            background: transparent;
+            border: none;
+            border-radius: 4px;
+            color: #999;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .auth-mode-btn.active {
+            background: #0066cc;
+            color: #fff;
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 12px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+            margin-top: 24px;
+        }
+
+        .login-btn:hover {
+            background: #0052a3;
+        }
+
+        .login-btn:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        .error-message {
+            background: #ff3333;
+            color: white;
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .btn-clear {
+            background: #444;
+            color: #e0e0e0;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-right: 10px;
+        }
+
+        .btn-clear:hover {
+            background: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1>ログイン（デバッグ版）</h1>
+            <p>詳細なログが右側に表示されます</p>
+        </div>
+
+        <div id="errorMessage" class="error-message"></div>
+
+        <form id="loginForm">
+            <div class="auth-mode-toggle">
+                <button type="button" class="auth-mode-btn active" data-mode="password">
+                    パスワード認証
+                </button>
+                <button type="button" class="auth-mode-btn" data-mode="group">
+                    グループID認証
+                </button>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="userId">ユーザーID</label>
+                <input 
+                    type="text" 
+                    id="userId" 
+                    class="form-input" 
+                    placeholder="ユーザーIDを入力"
+                    required
+                    autocomplete="username"
+                >
+            </div>
+
+            <div class="form-group" id="passwordGroup">
+                <label class="form-label" for="password">パスワード</label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    class="form-input" 
+                    placeholder="パスワードを入力"
+                    autocomplete="current-password"
+                >
+            </div>
+
+            <div class="form-group hidden" id="groupIdGroup">
+                <label class="form-label" for="groupId">グループID</label>
+                <input 
+                    type="text" 
+                    id="groupId" 
+                    class="form-input" 
+                    placeholder="グループIDを入力"
+                >
+            </div>
+
+            <button type="submit" class="login-btn" id="loginBtn">
+                ログイン
+            </button>
+        </form>
+    </div>
+
+    <div class="debug-panel">
+        <h2>🔍 デバッグログ</h2>
+        <button class="btn-clear" onclick="clearDebugLog()">ログクリア</button>
+        <button class="btn-clear" onclick="clearStorage()">ストレージクリア</button>
+        
+        <div class="debug-section">
+            <h3>現在のlocalStorage</h3>
+            <div class="debug-value" id="storageStatus">読み込み中...</div>
+        </div>
+
+        <div class="debug-section">
+            <h3>認証トークン情報</h3>
+            <div class="debug-value" id="tokenInfo">なし</div>
+        </div>
+
+        <div class="debug-section">
+            <h3>イベントログ</h3>
+            <div class="debug-log" id="debugLog"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentAuthMode = 'password';
+        let logEntries = [];
+
+        // デバッグログ関数
+        function debugLog(message, type = 'info') {
+            const timestamp = new Date().toISOString().split('T')[1].slice(0, -1);
+            const entry = {
+                timestamp,
+                message,
+                type
+            };
+            logEntries.push(entry);
+            
+            const logElement = document.getElementById('debugLog');
+            const logLine = `<span class="timestamp">[${timestamp}]</span> <span class="${type}">${type.toUpperCase()}</span>: ${message}\n`;
+            logElement.innerHTML += logLine;
+            logElement.scrollTop = logElement.scrollHeight;
+            
+            console.log(`[${timestamp}] ${type.toUpperCase()}: ${message}`);
+        }
+
+        function clearDebugLog() {
+            logEntries = [];
+            document.getElementById('debugLog').innerHTML = '';
+            debugLog('ログをクリアしました', 'info');
+        }
+
+        function clearStorage() {
+            localStorage.clear();
+            sessionStorage.clear();
+            updateStorageStatus();
+            debugLog('全ストレージをクリアしました', 'warn');
+        }
+
+        function updateStorageStatus() {
+            const storage = {};
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                storage[key] = localStorage.getItem(key);
+            }
+            document.getElementById('storageStatus').textContent = JSON.stringify(storage, null, 2);
+            
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                const parts = token.split(':');
+                const tokenInfo = {
+                    format: parts.length === 3 ? 'userId:groupId:group' : 'userId:password',
+                    userId: parts[0] || 'なし',
+                    credential: parts[1] ? '***' : 'なし',
+                    type: parts[2] || 'password',
+                    fullLength: token.length
+                };
+                document.getElementById('tokenInfo').textContent = JSON.stringify(tokenInfo, null, 2);
+            } else {
+                document.getElementById('tokenInfo').textContent = 'トークンなし';
+            }
+        }
+
+        // 初期化
+        debugLog('ページ読み込み開始', 'info');
+        updateStorageStatus();
+
+        // 認証モード切り替え
+        document.querySelectorAll('.auth-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const mode = btn.dataset.mode;
+                currentAuthMode = mode;
+                debugLog(`認証モード変更: ${mode}`, 'info');
+
+                document.querySelectorAll('.auth-mode-btn').forEach(b => {
+                    b.classList.toggle('active', b.dataset.mode === mode);
+                });
+
+                const passwordGroup = document.getElementById('passwordGroup');
+                const groupIdGroup = document.getElementById('groupIdGroup');
+                const passwordInput = document.getElementById('password');
+                const groupIdInput = document.getElementById('groupId');
+
+                if (mode === 'password') {
+                    passwordGroup.classList.remove('hidden');
+                    groupIdGroup.classList.add('hidden');
+                    passwordInput.required = true;
+                    groupIdInput.required = false;
+                    groupIdInput.value = '';
+                } else {
+                    passwordGroup.classList.add('hidden');
+                    groupIdGroup.classList.remove('hidden');
+                    passwordInput.required = false;
+                    groupIdInput.required = true;
+                    passwordInput.value = '';
+                }
+            });
+        });
+
+        function showError(message) {
+            const errorElement = document.getElementById('errorMessage');
+            errorElement.textContent = message;
+            errorElement.classList.add('show');
+            debugLog(`エラー表示: ${message}`, 'error');
+        }
+
+        function hideError() {
+            document.getElementById('errorMessage').classList.remove('show');
+        }
+
+        // ログイン処理
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError();
+
+            const userId = document.getElementById('userId').value.trim();
+            const password = document.getElementById('password').value;
+            const groupId = document.getElementById('groupId').value.trim();
+            const loginBtn = document.getElementById('loginBtn');
+
+            debugLog('ログインフォーム送信', 'info');
+            debugLog(`ユーザーID: ${userId}`, 'info');
+            debugLog(`認証モード: ${currentAuthMode}`, 'info');
+
+            if (!userId) {
+                showError('ユーザーIDを入力してください');
+                return;
+            }
+
+            if (currentAuthMode === 'password' && !password) {
+                showError('パスワードを入力してください');
+                return;
+            }
+
+            if (currentAuthMode === 'group' && !groupId) {
+                showError('グループIDを入力してください');
+                return;
+            }
+
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'ログイン中...';
+
+            try {
+                const requestBody = { userId };
+                if (currentAuthMode === 'password') {
+                    requestBody.password = password;
+                } else {
+                    requestBody.groupId = groupId;
+                }
+
+                debugLog('API リクエスト送信: /api/auth/login', 'info');
+                debugLog(`リクエストボディ: ${JSON.stringify({ userId, mode: currentAuthMode })}`, 'info');
+
+                const response = await fetch('./api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                debugLog(`レスポンスステータス: ${response.status}`, 'info');
+
+                const data = await response.json();
+                debugLog(`レスポンスデータ: ${JSON.stringify(data)}`, 'info');
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'ログインに失敗しました');
+                }
+
+                // トークンをlocalStorageに保存
+                debugLog('トークンをlocalStorageに保存', 'info');
+                debugLog(`トークン: ${data.token}`, 'info');
+                localStorage.setItem('authToken', data.token);
+                localStorage.setItem('userId', data.user.user_id);
+                updateStorageStatus();
+
+                debugLog('ログイン成功！', 'info');
+                debugLog('3秒後にindex.htmlにリダイレクトします（ログを確認してください）', 'warn');
+
+                // 3秒待ってからリダイレクト
+                await new Promise(resolve => setTimeout(resolve, 3000));
+
+                const urlParams = new URLSearchParams(window.location.search);
+                const returnUrl = urlParams.get('return') || './index.html';
+                debugLog(`リダイレクト先: ${returnUrl}`, 'info');
+                window.location.href = returnUrl;
+
+            } catch (error) {
+                debugLog(`ログインエラー: ${error.message}`, 'error');
+                console.error('Login error:', error);
+                showError(error.message);
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'ログイン';
+            }
+        });
+
+        // 既存認証のチェック
+        async function checkExistingAuth() {
+            const token = localStorage.getItem('authToken');
+            
+            debugLog('既存認証チェック開始', 'info');
+            
+            if (!token) {
+                debugLog('トークンなし - ログイン画面を表示', 'info');
+                return;
+            }
+
+            debugLog(`既存トークン検出: ${token}`, 'info');
+
+            try {
+                debugLog('トークン検証リクエスト送信: /api/auth/me', 'info');
+                
+                const response = await fetch('./api/auth/me', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                debugLog(`検証レスポンスステータス: ${response.status}`, 'info');
+
+                if (response.ok) {
+                    const data = await response.json();
+                    debugLog('トークンは有効です', 'info');
+                    debugLog(`ユーザー情報: ${JSON.stringify(data.user)}`, 'info');
+                    debugLog('3秒後にindex.htmlにリダイレクトします', 'warn');
+                    
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const returnUrl = urlParams.get('return') || './index.html';
+                    debugLog(`リダイレクト先: ${returnUrl}`, 'info');
+                    window.location.href = returnUrl;
+                } else {
+                    const errorData = await response.json().catch(() => ({}));
+                    debugLog(`トークンが無効です: ${JSON.stringify(errorData)}`, 'error');
+                    debugLog('ストレージからトークンを削除', 'warn');
+                    localStorage.removeItem('authToken');
+                    localStorage.removeItem('userId');
+                    updateStorageStatus();
+                }
+            } catch (error) {
+                debugLog(`認証チェックエラー: ${error.message}`, 'error');
+                debugLog('ストレージからトークンを削除', 'warn');
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('userId');
+                updateStorageStatus();
+            }
+        }
+
+        // ページ読み込み時に実行
+        debugLog('既存認証チェックを実行', 'info');
+        checkExistingAuth();
+
+        // ストレージ変更を監視
+        setInterval(updateStorageStatus, 1000);
+    </script>
+</body>
+</html>
