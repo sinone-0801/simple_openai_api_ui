@@ -126,6 +126,26 @@
             background: #0052a3;
         }
 
+        .stats-wrapper {
+            margin-top: 15px;
+            padding: 15px;
+            background: #333;
+            border-radius: 6px;
+            position: relative;
+        }
+
+        .stats-wrapper .token-usage-panel {
+            padding: 0;
+            background: transparent;
+            border-radius: 0;
+            margin-top: 0;
+            padding-top: 15px;
+        }
+
+        .stats-wrapper .token-usage-panel:first-child {
+            padding-top: 0;
+        }
+
         .token-usage-panel {
             padding: 15px;
             background: #333;
@@ -1099,7 +1119,7 @@
             }
 
             .main-content {
-                height: 100vh;
+                height: 100%;
             }
 
             body.sidebar-open .main-content {
@@ -1185,60 +1205,56 @@
                 <h1>OpenAI API UI</h1>
                 <button class="new-thread-btn" onclick="showNewThreadModal()">+ 新規スレッド</button>
 
-                <!-- トークン使用量パネル -->
-                <div class="token-usage-panel" id="tokenUsagePanel">
+                <!-- 使用状況まとめパネル -->
+                <div class="stats-wrapper">
                     <div class="token-usage-title">
-                        <span>トークン使用量 (24h)</span>
-                        <button class="panel-toggle-btn" onclick="togglePanel('tokenUsage')" aria-label="トークン使用量パネルを折りたたむ">
-                            <span id="tokenUsageToggleIcon">▼</span>
+                        <span>使用状況</span>
+                        <button class="panel-toggle-btn" onclick="togglePanel('stats')" aria-label="使用状況パネルを折りたたむ">
+                            <span id="statsToggleIcon">▼</span>
                         </button>
                     </div>
 
-                    <div class="collapsible-panel" id="tokenUsageContent">
-                    <div class="token-usage-item">
-                        <div class="token-usage-label">High Cost Models (1M/day)</div>
-                        <div class="token-usage-bar">
-                            <div id="highCostBar" class="token-usage-fill" style="width: 0%"></div>
-                        </div>
-                        <div class="token-usage-text">
-                            <span id="highCostUsage">0</span>
-                            <span id="highCostPercent">0%</span>
-                        </div>
-                    </div>
-                    
-                    <div class="token-usage-item">
-                        <div class="token-usage-label">Low Cost Models (10M/day)</div>
-                        <div class="token-usage-bar">
-                            <div id="lowCostBar" class="token-usage-fill" style="width: 0%"></div>
-                        </div>
-                        <div class="token-usage-text">
-                            <span id="lowCostUsage">0</span>
-                            <span id="lowCostPercent">0%</span>
-                        </div>
-                    </div>
-                    </div>
-                </div>
+                    <div class="collapsible-panel" id="statsContent">
+                        <!-- トークン使用量 -->
+                        <div class="token-usage-panel" id="tokenUsagePanel">
+                            <div class="token-usage-title">トークン使用量 (24h)</div>
+                            <div class="token-usage-item">
+                                <div class="token-usage-label">High Cost Models (1M/day)</div>
+                                <div class="token-usage-bar">
+                                    <div id="highCostBar" class="token-usage-fill" style="width: 0%"></div>
+                                </div>
+                                <div class="token-usage-text">
+                                    <span id="highCostUsage">0</span>
+                                    <span id="highCostPercent">0%</span>
+                                </div>
+                            </div>
 
-                <!-- クレジット残高パネル -->
-                <div class="token-usage-panel" id="creditPanel">
-                    <div class="token-usage-title">
-                        <span>クレジット残高</span>
-                        <button class="panel-toggle-btn" onclick="togglePanel('credit')" aria-label="クレジット残高パネルを折りたたむ">
-                            <span id="creditToggleIcon">▼</span>
-                        </button>
-                    </div>
+                            <div class="token-usage-item">
+                                <div class="token-usage-label">Low Cost Models (10M/day)</div>
+                                <div class="token-usage-bar">
+                                    <div id="lowCostBar" class="token-usage-fill" style="width: 0%"></div>
+                                </div>
+                                <div class="token-usage-text">
+                                    <span id="lowCostUsage">0</span>
+                                    <span id="lowCostPercent">0%</span>
+                                </div>
+                            </div>
+                        </div>
 
-                    <div class="collapsible-panel" id="creditContent">
-                    <div class="token-usage-item">
-                        <div class="token-usage-label">残クレジット</div>
-                        <div class="token-usage-bar">
-                            <div id="creditBar" class="token-usage-fill" style="width: 0%"></div>
+                        <!-- クレジット残高 -->
+                        <div class="token-usage-panel" id="creditPanel">
+                            <div class="token-usage-title">クレジット残高</div>
+                            <div class="token-usage-item">
+                                <div class="token-usage-label">残クレジット</div>
+                                <div class="token-usage-bar">
+                                    <div id="creditBar" class="token-usage-fill" style="width: 0%"></div>
+                                </div>
+                                <div class="token-usage-text">
+                                    <span id="creditAmount">0</span>
+                                    <span id="creditText"></span>
+                                </div>
+                            </div>
                         </div>
-                        <div class="token-usage-text">
-                            <span id="creditAmount">0</span>
-                            <span id="creditText"></span>
-                        </div>
-                    </div>
                     </div>
                 </div>
             </div>
@@ -1555,34 +1571,23 @@
 
         // ユーザー情報を表示
         function updateUserInfo(user) {
-            // サイドバーヘッダーにユーザー情報を追加
-            const sidebarHeader = document.querySelector('.sidebar-header');
-            if (sidebarHeader && !document.getElementById('userInfo')) {
+            // statsContent内にユーザー情報を追加
+            const statsContent = document.getElementById('statsContent');
+            if (statsContent && !document.getElementById('userInfo')) {
                 const userInfoDiv = document.createElement('div');
                 userInfoDiv.id = 'userInfo';
                 userInfoDiv.className = 'token-usage-panel';
-                userInfoDiv.style.cssText = 'margin-top: 15px;';
 
                 userInfoDiv.innerHTML = `
-                    <div class="token-usage-title">
-                        <span>ユーザー情報</span>
-                        <button class="panel-toggle-btn" onclick="togglePanel('userInfo')" aria-label="ユーザー情報パネルを折りたたむ">
-                            <span id="userInfoToggleIcon">▼</span>
-                        </button>
-                    </div>
-                    <div class="collapsible-panel" id="userInfoContent">
-                        <div style="color: #999; margin-bottom: 4px;">ログイン中</div>
-                        <div style="color: #e0e0e0; font-weight: 500; margin-bottom: 8px;">${user.user_id}</div>
-                        <button onclick="logout()" style="width: 100%; padding: 6px; background: #444; border: none; border-radius: 4px; color: #e0e0e0; cursor: pointer; font-size: 12px;">
-                            ログアウト
-                        </button>
-                    </div>
+                    <div class="token-usage-title">ユーザー情報</div>
+                    <div style="color: #999; margin-bottom: 4px; font-size: 12px;">ログイン中</div>
+                    <div style="color: #e0e0e0; font-weight: 500; margin-bottom: 8px; font-size: 12px;">${user.user_id}</div>
+                    <button onclick="logout()" style="width: 100%; padding: 6px; background: #444; border: none; border-radius: 4px; color: #e0e0e0; cursor: pointer; font-size: 12px;">
+                        ログアウト
+                    </button>
                 `;
 
-                sidebarHeader.appendChild(userInfoDiv);
-
-                // 初期化後にパネル状態を適用
-                setTimeout(() => initPanelStates(), 0);
+                statsContent.appendChild(userInfoDiv);
             }
         }
 
@@ -2759,26 +2764,23 @@
         function initPanelStates() {
             const isMobile = window.innerWidth <= 1024;
 
-            // モバイルではデフォルトで折りたたむ
-            const panels = ['tokenUsage', 'credit', 'userInfo'];
-            panels.forEach(panelName => {
-                const content = document.getElementById(`${panelName}Content`);
-                const icon = document.getElementById(`${panelName}ToggleIcon`);
+            // 使用状況パネル（stats）の折りたたみ状態を管理
+            const statsContent = document.getElementById('statsContent');
+            const statsIcon = document.getElementById('statsToggleIcon');
 
-                if (!content || !icon) return;
-
+            if (statsContent && statsIcon) {
                 // localStorage から状態を取得、または isMobile なら折りたたむ
-                const savedState = localStorage.getItem(`panel_${panelName}_collapsed`);
+                const savedState = localStorage.getItem('panel_stats_collapsed');
                 const shouldCollapse = savedState !== null ? savedState === 'true' : isMobile;
 
                 if (shouldCollapse) {
-                    content.classList.add('collapsed');
-                    icon.textContent = '▶';
+                    statsContent.classList.add('collapsed');
+                    statsIcon.textContent = '▶';
                 } else {
-                    content.classList.remove('collapsed');
-                    icon.textContent = '▼';
+                    statsContent.classList.remove('collapsed');
+                    statsIcon.textContent = '▼';
                 }
-            });
+            }
 
             // PC版サイドバーの状態を復元
             if (!isMobile) {
