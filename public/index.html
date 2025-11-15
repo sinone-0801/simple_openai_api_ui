@@ -1191,7 +1191,8 @@
 
             .message-input {
                 min-height: 110px;
-                max-height: 50vh;
+                /* モバイル: Safe Area、ナビゲーションバーを考慮した安全な値 */
+                max-height: 35vh;
             }
 
             .system-prompt-header {
@@ -1702,7 +1703,19 @@
 
                 // min-heightとmax-heightの制約を適用
                 const minHeight = 120;
-                const maxHeight = window.innerHeight * 0.6;
+                // モバイル環境を考慮：chat-areaの実際の高さから安全な最大値を計算
+                const chatArea = document.querySelector('.chat-area');
+                const isMobile = window.innerWidth <= 1024;
+                let maxHeight;
+
+                if (isMobile && chatArea) {
+                    // モバイル: chat-areaの高さの40%まで（Safe Area、ヘッダー、ナビゲーションバーを考慮）
+                    maxHeight = Math.min(chatArea.clientHeight * 0.4, window.innerHeight * 0.35);
+                } else {
+                    // PC: 従来通り
+                    maxHeight = window.innerHeight * 0.6;
+                }
+
                 const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
 
                 messageInput.style.flex = 'none';
@@ -1732,7 +1745,19 @@
                 const newHeight = startHeight + deltaY;
 
                 const minHeight = 120;
-                const maxHeight = window.innerHeight * 0.6;
+                // モバイル環境を考慮：chat-areaの実際の高さから安全な最大値を計算
+                const chatArea = document.querySelector('.chat-area');
+                const isMobile = window.innerWidth <= 1024;
+                let maxHeight;
+
+                if (isMobile && chatArea) {
+                    // モバイル: chat-areaの高さの40%まで（Safe Area、ヘッダー、ナビゲーションバーを考慮）
+                    maxHeight = Math.min(chatArea.clientHeight * 0.4, window.innerHeight * 0.35);
+                } else {
+                    // PC: 従来通り
+                    maxHeight = window.innerHeight * 0.6;
+                }
+
                 const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
 
                 messageInput.style.flex = 'none';
