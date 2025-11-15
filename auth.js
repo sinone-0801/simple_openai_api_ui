@@ -65,6 +65,11 @@ function generateSalt() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+// 入力値の検証ヘルパー関数
+function isValidString(value) {
+  return value !== null && value !== undefined && value !== '' && typeof value === 'string';
+}
+
 // ユーザーの作成
 export async function createUser({ 
   userId, 
@@ -110,6 +115,17 @@ export async function createUser({
 
 // ユーザー認証（UserID + Password）
 export async function authenticateWithPassword(userId, password) {
+  // ★ セキュリティ対策: UserIDとPasswordが有効な文字列であることを確認
+  if (!isValidString(userId)) {
+    console.warn('Authentication failed: Invalid userId');
+    return null;
+  }
+
+  if (!isValidString(password)) {
+    console.warn('Authentication failed: Invalid password (empty or null)');
+    return null;
+  }
+
   const user = await db.get(`
     SELECT * FROM users 
     WHERE user_id = ? AND is_active = 1
@@ -124,11 +140,14 @@ export async function authenticateWithPassword(userId, password) {
     throw new Error(`Account is ${user.authority.toLowerCase()}`);
   }
 
-  // パスワードチェック
+  // ★ セキュリティ対策: データベースにパスワードハッシュとソルトが存在しない場合は認証失敗
+  // （CLI管理用のパスワードなしAdminアカウントなど）
   if (!user.password_hash || !user.salt) {
+    console.warn(`Authentication failed: User ${userId} has no password set`);
     return null;
   }
 
+  // パスワードチェック
   const hash = hashPassword(password, user.salt);
   if (hash !== user.password_hash) {
     return null;
@@ -142,12 +161,29 @@ export async function authenticateWithPassword(userId, password) {
 
 // ユーザー認証（UserID + GroupID）
 export async function authenticateWithGroup(userId, groupId) {
+  // ★ セキュリティ対策: UserIDとGroupIDが有効な文字列であることを確認
+  if (!isValidString(userId)) {
+    console.warn('Authentication failed: Invalid userId');
+    return null;
+  }
+
+  if (!isValidString(groupId)) {
+    console.warn('Authentication failed: Invalid groupId (empty or null)');
+    return null;
+  }
+
   const user = await db.get(`
     SELECT * FROM users 
     WHERE user_id = ? AND group_id = ? AND is_active = 1
   `, [userId, groupId]);
 
   if (!user) {
+    return null;
+  }
+
+  // ★ セキュリティ対策: データベースのgroupIdがNULLまたは空の場合は認証失敗
+  if (!isValidString(user.group_id)) {
+    console.warn(`Authentication failed: User ${userId} has no groupId set`);
     return null;
   }
 
