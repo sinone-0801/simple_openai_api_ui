@@ -1081,6 +1081,22 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- クレジット残高パネル -->
+                <div class="token-usage-panel">
+                    <div class="token-usage-title">クレジット残高</div>
+                    
+                    <div class="token-usage-item">
+                        <div class="token-usage-label">残クレジット</div>
+                        <div class="token-usage-bar">
+                            <div id="creditBar" class="token-usage-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="token-usage-text">
+                            <span id="creditAmount">0</span>
+                            <span id="creditText"></span>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div id="threadsList" class="threads-list"></div>
         </div>
@@ -1329,6 +1345,20 @@
             };
         }
 
+        // 認証付きfetch（全てのAPIリクエストで使用）
+        async function authFetch(url, options = {}) {
+            const authHeaders = getAuthHeaders();
+            const headers = {
+                ...authHeaders,
+                ...(options.headers || {})
+            };
+            
+            return fetch(url, {
+                ...options,
+                headers
+            });
+        }
+
         // 認証チェック
         async function checkAuth() {
             const token = getAuthToken();
@@ -1339,7 +1369,7 @@
             }
 
             try {
-                const response = await fetch('./api/auth/me', {
+                const response = await authFetch('./api/auth/me', {
                     headers: getAuthHeaders()
                 });
 
@@ -1388,7 +1418,6 @@
                 userInfoDiv.innerHTML = `
                     <div style="color: #999; margin-bottom: 4px;">ログイン中</div>
                     <div style="color: #e0e0e0; font-weight: 500; margin-bottom: 8px;">${user.user_id}</div>
-                    <div style="color: #999; font-size: 11px; margin-bottom: 8px;">残クレジット: ${user.remaining_credit?.toLocaleString() || '0'}</div>
                     <button onclick="logout()" style="width: 100%; padding: 6px; background: #444; border: none; border-radius: 4px; color: #e0e0e0; cursor: pointer; font-size: 12px;">
                         ログアウト
                     </button>
@@ -1554,8 +1583,10 @@
             await loadThreads();
             await loadModels();
             await loadTokenUsage();
+            await loadCreditInfo(); // クレジット情報を初回読み込み
             await loadArtifacts();
-            setInterval(loadTokenUsage, 30000);
+            setInterval(loadTokenUsage, 30000); // 30秒ごとにトークン使用量を更新
+            setInterval(loadCreditInfo, 30000); // 30秒ごとにクレジット情報を更新
 
             artifactDropzoneUpdater = initArtifactDropzone();
             handleResponsiveSidebarState();
@@ -1569,7 +1600,7 @@
 
         async function loadModels() {
             try {
-                const response = await fetch('./api/models');
+                const response = await authFetch('./api/models');
                 const data = await response.json();
                 availableModels = data.availableModels;
                 
@@ -1598,7 +1629,7 @@
 
         async function loadTokenUsage() {
             try {
-                const response = await fetch('./api/token-usage/stats');
+                const response = await authFetch('./api/token-usage/stats');
                 const data = await response.json();
                 
                 const highCostUsage = data.last24Hours.highCost.usage;
@@ -1641,12 +1672,85 @@
             return tokens.toString();
         }
 
+        // クレジット情報の読み込み
+        let CREDIT_MAX_DISPLAY = 100000; // デフォルト値、サーバーから取得
+        
+        async function loadCreditInfo() {
+            try {
+                const response = await authFetch('./api/auth/me');
+                const data = await response.json();
+                
+                if (data.user && typeof data.user.remaining_credit === 'number') {
+                    updateCreditDisplay(data.user.remaining_credit);
+                }
+                
+                // サーバーから最大表示値を取得（存在する場合）
+                if (data.creditMaxDisplay) {
+                    CREDIT_MAX_DISPLAY = data.creditMaxDisplay;
+                }
+            } catch (error) {
+                console.error('Failed to load credit info:', error);
+            }
+        }
+        
+        // クレジット表示を更新（対数スケール）
+        function updateCreditDisplay(remainingCredit) {
+            const creditAmount = document.getElementById('creditAmount');
+            const creditText = document.getElementById('creditText');
+            const creditBar = document.getElementById('creditBar');
+            
+            if (!creditAmount || !creditText || !creditBar) return;
+            
+            // クレジットが0以下の場合は特別な表示
+            if (remainingCredit <= 0) {
+                creditAmount.textContent = remainingCredit.toLocaleString();
+                creditAmount.style.color = '#ff3333';
+                creditAmount.style.fontWeight = 'bold';
+                creditAmount.style.fontSize = '14px';
+                
+                creditText.textContent = '残高不足';
+                creditText.style.color = '#ff3333';
+                creditText.style.fontWeight = 'bold';
+                
+                creditBar.style.width = '0%';
+                creditBar.className = 'token-usage-fill danger';
+                return;
+            }
+            
+            // 通常の表示（0より大きい場合）
+            creditAmount.style.color = '#aaa';
+            creditAmount.style.fontWeight = 'normal';
+            creditAmount.style.fontSize = '11px';
+            creditText.style.color = '#aaa';
+            creditText.style.fontWeight = 'normal';
+            
+            // 数値を表示（カンマ区切り）
+            creditAmount.textContent = remainingCredit.toLocaleString();
+            
+            // 対数スケールでパーセンテージを計算
+            const logCredit = Math.log10(remainingCredit);
+            const logMax = Math.log10(CREDIT_MAX_DISPLAY);
+            let percentage = (logCredit / logMax) * 100;
+            percentage = Math.min(Math.max(percentage, 0), 100);
+            
+            creditText.textContent = ``;
+            creditBar.style.width = `${percentage}%`;
+            
+            // 色分け（残クレジットが少ない場合に警告）
+            creditBar.className = 'token-usage-fill';
+            if (remainingCredit < 1000) {
+                creditBar.classList.add('danger');
+            } else if (remainingCredit < 5000) {
+                creditBar.classList.add('warning');
+            }
+        }
+
         async function changeModel() {
             if (!currentThreadId) return;
             const model = document.getElementById('modelSelect').value;
             
             try {
-                await fetch(`./api/threads/${currentThreadId}/model`, {
+                await authFetch(`./api/threads/${currentThreadId}/model`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ model })
@@ -1660,7 +1764,7 @@
 
         async function loadThreads() {
             try {
-                const response = await fetch('./api/threads');
+                const response = await authFetch('./api/threads');
                 const data = await response.json();
                 const threadsList = document.getElementById('threadsList');
                 
@@ -1685,7 +1789,7 @@
 
         async function loadThread(threadId) {
             try {
-                const response = await fetch(`./api/threads/${threadId}`);
+                const response = await authFetch(`./api/threads/${threadId}`);
                 
                 // レスポンスが正常でない場合はエラー処理
                 if (!response.ok) {
@@ -1804,7 +1908,7 @@
             const systemPrompt = document.getElementById('threadSystemPrompt').value;
             
             try {
-                const response = await fetch('./api/threads', {
+                const response = await authFetch('./api/threads', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title, model, systemPrompt })
@@ -1824,7 +1928,7 @@
             if (!currentThreadId || !confirm('このスレッドを削除してもよろしいですか?')) return;
             
             try {
-                await fetch(`./api/threads/${currentThreadId}`, { method: 'DELETE' });
+                await authFetch(`./api/threads/${currentThreadId}`, { method: 'DELETE' });
                 closeModal('editPromptModal');
                 currentThreadId = null;
                 document.getElementById('chatTitle').textContent = 'スレッドを選択してください';
@@ -1872,7 +1976,7 @@
         async function fetchSystemPrompt() {
             if (!currentThreadId) return;
             try {
-                const response = await fetch(`./api/threads/${currentThreadId}/system-prompt`);
+                const response = await authFetch(`./api/threads/${currentThreadId}/system-prompt`);
                 const data = await response.json();
                 applySystemPromptData(data);
             } catch (error) {
@@ -1884,7 +1988,7 @@
             if (!currentThreadId) return;
             try {
                 const basePrompt = document.getElementById('systemPromptUserInput').value;
-                const response = await fetch(`./api/threads/${currentThreadId}/system-prompt`, {
+                const response = await authFetch(`./api/threads/${currentThreadId}/system-prompt`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ systemPrompt: basePrompt })
@@ -2022,7 +2126,7 @@
 
             try {
                 statusLabel.textContent = `アップロード中 (${allowed.length} ファイル)...`;
-                const response = await fetch('./api/artifacts/upload', {
+                const response = await authFetch('./api/artifacts/upload', {
                     method: 'POST',
                     body: formData
                 });
@@ -2075,7 +2179,7 @@
             input.disabled = true;
 
             try {
-                const response = await fetch(`./api/threads/${currentThreadId}/messages`, {
+                const response = await authFetch(`./api/threads/${currentThreadId}/messages`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content })
@@ -2112,6 +2216,7 @@
                 input.disabled = false;
                 input.focus();
                 await loadTokenUsage();
+                await loadCreditInfo(); // クレジット情報を更新
             }
         }
 
@@ -2149,7 +2254,7 @@
 
         async function viewArtifact(artifactId) {
             try {
-                const response = await fetch(`./api/artifacts/${artifactId}`);
+                const response = await authFetch(`./api/artifacts/${artifactId}`);
                 const artifact = await response.json();
                 
                 currentArtifact = artifact;
@@ -2164,7 +2269,7 @@
 
         async function downloadArtifact(artifactId) {
             try {
-                const response = await fetch(`./api/artifacts/${artifactId}`);
+                const response = await authFetch(`./api/artifacts/${artifactId}`);
                 const artifact = await response.json();
                 
                 const blob = new Blob([artifact.content], { type: 'text/plain' });
@@ -2235,7 +2340,7 @@
             }
 
             try {
-                const response = await fetch('./api/artifacts', {
+                const response = await authFetch('./api/artifacts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2281,7 +2386,7 @@
             const description = document.getElementById('editArtifactDescription').value;
 
             try {
-                const response = await fetch(`./api/artifacts/${currentArtifact.id}`, {
+                const response = await authFetch(`./api/artifacts/${currentArtifact.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2310,7 +2415,7 @@
             if (!confirm('このアーティファクトを削除してもよろしいですか？')) return;
             
             try {
-                const response = await fetch(`./api/artifacts/${artifactId}`, { method: 'DELETE' });
+                const response = await authFetch(`./api/artifacts/${artifactId}`, { method: 'DELETE' });
                 if (!response.ok) throw new Error('削除に失敗しました');
                 
                 await loadArtifacts();

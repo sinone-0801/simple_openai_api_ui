@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>購入完了 - Discord Bot</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: #2a2a2a;
+      border-radius: 8px;
+      border: 1px solid #3a3a3a;
+      max-width: 600px;
+      width: 100%;
+      padding: 60px 40px;
+      text-align: center;
+    }
+
+    .success-icon {
+      width: 80px;
+      height: 80px;
+      background: #00d166;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 30px;
+      animation: scaleIn 0.4s ease;
+    }
+
+    .success-icon::after {
+      content: '✓';
+      color: white;
+      font-size: 48px;
+      font-weight: bold;
+    }
+
+    @keyframes scaleIn {
+      0% {
+        transform: scale(0);
+      }
+      50% {
+        transform: scale(1.05);
+      }
+      100% {
+        transform: scale(1);
+      }
+    }
+
+    h1 {
+      color: #fff;
+      margin-bottom: 15px;
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .message {
+      color: #999;
+      font-size: 15px;
+      margin-bottom: 30px;
+      line-height: 1.6;
+    }
+
+    .info-box {
+      background: #333;
+      padding: 20px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      margin-bottom: 30px;
+      text-align: left;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #444;
+    }
+
+    .info-row:last-child {
+      border-bottom: none;
+    }
+
+    .info-label {
+      font-weight: 500;
+      color: #999;
+      font-size: 14px;
+    }
+
+    .info-value {
+      font-weight: 600;
+      color: #e0e0e0;
+      font-size: 14px;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 12px 32px;
+      background: #0066cc;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.2s ease;
+      margin: 5px;
+    }
+
+    .btn:hover {
+      background: #0052a3;
+    }
+
+    .btn-secondary {
+      background: #444;
+    }
+
+    .btn-secondary:hover {
+      background: #555;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: #999;
+    }
+
+    .spinner {
+      border: 3px solid #333;
+      border-top: 3px solid #0066cc;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 20px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        padding: 40px 20px;
+      }
+
+      h1 {
+        font-size: 20px;
+      }
+
+      .btn {
+        display: block;
+        width: 100%;
+        margin: 10px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="loading-section">
+      <div class="spinner"></div>
+      <p class="loading">購入情報を確認しています...</p>
+    </div>
+
+    <div id="success-section" style="display: none;">
+      <div class="success-icon"></div>
+      <h1>購入が完了しました！</h1>
+      <p class="message">
+        クレジットの購入ありがとうございます。<br>
+        クレジットがアカウントに追加されました。
+      </p>
+
+      <div class="info-box" id="purchase-info">
+        <!-- 購入情報はJavaScriptで動的に表示 -->
+      </div>
+
+      <a href="/purchase.html" class="btn">さらに購入する</a>
+      <a href="/" class="btn btn-secondary">トップページへ</a>
+    </div>
+  </div>
+
+  <script>
+    async function loadPurchaseInfo() {
+      try {
+        const authToken = localStorage.getItem('authToken');
+        if (!authToken) {
+          throw new Error('ログインしてください');
+        }
+
+        // ユーザー情報を取得
+        const response = await fetch('/api/auth/me', {
+          headers: {
+            'Authorization': `Bearer ${authToken}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('ユーザー情報の取得に失敗しました');
+        }
+
+        const data = await response.json();
+        const user = data.user;
+
+        // 購入情報を表示
+        const infoBox = document.getElementById('purchase-info');
+        infoBox.innerHTML = `
+          <div class="info-row">
+            <span class="info-label">ユーザーID</span>
+            <span class="info-value">${user.user_id}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">現在のクレジット</span>
+            <span class="info-value">${user.remaining_credit.toLocaleString()} クレジット</span>
+          </div>
+        `;
+
+        // 成功セクションを表示
+        document.getElementById('loading-section').style.display = 'none';
+        document.getElementById('success-section').style.display = 'block';
+
+      } catch (error) {
+        console.error('Error:', error);
+        alert('購入情報の取得に失敗しました: ' + error.message);
+        window.location.href = '/purchase.html';
+      }
+    }
+
+    // ページ読み込み時に実行
+    loadPurchaseInfo();
+  </script>
+</body>
+</html>

@@ -16,7 +16,6 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-
 // ====================
 // 支払い・クレジット購入 API
 // ====================
@@ -115,7 +114,11 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
+// 認証関係（JWT有効期限の設定）
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h';
+
+// UI表示設定
+const CREDIT_MAX_DISPLAY = parseInt(process.env.CREDIT_MAX_DISPLAY) || 100000;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -303,28 +306,26 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: 'Authorization header required' });
     }
 
-    // Bearer トークン形式: "Bearer userId:password" または "Bearer userId:groupId:group"
+    // Bearer トークン形式: "Bearer <JWT_TOKEN>"
     const token = authHeader.replace('Bearer ', '');
-    const parts = token.split(':');
     
-    if (parts.length < 2) {
+    if (!token) {
       return res.status(401).json({ error: 'Invalid token format' });
     }
 
-    let user = null;
-    const [userId, credential, type] = parts;
-
-    // 認証方式の判定
-    if (type === 'group' && parts.length === 3) {
-      // UserID + GroupID認証
-      user = await auth.authenticateWithGroup(userId, credential);
-    } else {
-      // UserID + Password認証
-      user = await auth.authenticateWithPassword(userId, credential);
+    // JWTトークンを検証
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (jwtError) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
+    // デコードされたトークンからユーザー情報を取得
+    const user = await auth.getUser(decoded.sub);
+    
     if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ error: 'User not found' });
     }
 
     // リクエストにユーザー情報を添付
@@ -1457,7 +1458,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
           console.log(`出力トークン: ${response.usage.output_tokens}`);
           console.log(`合計トークン: ${response.usage.total_tokens}`);
           console.log('---------------------\n');
-          await logTokenUsage(selectedModel, response.usage);
+          await logTokenUsage(selectedModel, response.usage, req.user.user_id);
         }
 
         // レスポンス構造の取得
@@ -2252,7 +2253,10 @@ app.post('/api/artifacts/upload', requireAuth, upload.array('files'), async (req
 // ユーザー情報取得
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
-    res.json({ user: req.user });
+    res.json({ 
+      user: req.user,
+      creditMaxDisplay: CREDIT_MAX_DISPLAY
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2277,10 +2281,13 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    // JWTトークンを生成
+    const token = createAccessToken(user);
+
     res.json({ 
       success: true,
       user,
-      token: groupId ? `${userId}:${groupId}:group` : `${userId}:${password}`
+      token
     });
   } catch (error) {
     if (error.message.includes('stopped') || error.message.includes('banned')) {

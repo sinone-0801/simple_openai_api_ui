@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>購入キャンセル - Discord Bot</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: #2a2a2a;
+      border-radius: 8px;
+      border: 1px solid #3a3a3a;
+      max-width: 600px;
+      width: 100%;
+      padding: 60px 40px;
+      text-align: center;
+    }
+
+    .cancel-icon {
+      width: 80px;
+      height: 80px;
+      background: #ff9800;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 30px;
+      animation: scaleIn 0.4s ease;
+    }
+
+    .cancel-icon::after {
+      content: '✕';
+      color: white;
+      font-size: 48px;
+      font-weight: bold;
+    }
+
+    @keyframes scaleIn {
+      0% {
+        transform: scale(0);
+      }
+      50% {
+        transform: scale(1.05);
+      }
+      100% {
+        transform: scale(1);
+      }
+    }
+
+    h1 {
+      color: #fff;
+      margin-bottom: 15px;
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .message {
+      color: #999;
+      font-size: 15px;
+      margin-bottom: 30px;
+      line-height: 1.6;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 12px 32px;
+      background: #0066cc;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.2s ease;
+      margin: 5px;
+    }
+
+    .btn:hover {
+      background: #0052a3;
+    }
+
+    .btn-secondary {
+      background: #444;
+    }
+
+    .btn-secondary:hover {
+      background: #555;
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        padding: 40px 20px;
+      }
+
+      h1 {
+        font-size: 20px;
+      }
+
+      .btn {
+        display: block;
+        width: 100%;
+        margin: 10px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="cancel-icon"></div>
+    <h1>購入がキャンセルされました</h1>
+    <p class="message">
+      決済がキャンセルされました。<br>
+      再度購入したい場合は、購入ページからお手続きください。
+    </p>
+
+    <a href="/purchase.html" class="btn">購入ページに戻る</a>
+    <a href="/" class="btn btn-secondary">トップページへ</a>
+  </div>
+</body>
+</html>
