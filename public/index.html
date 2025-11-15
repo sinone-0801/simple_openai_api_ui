@@ -19,10 +19,8 @@
             height: 100dvh; /* 動的なビューポート高さ（モバイルのUIを考慮） */
             overflow: hidden;
             display: flex;
-            padding-top: env(safe-area-inset-top);
-            padding-bottom: env(safe-area-inset-bottom);
-            padding-left: env(safe-area-inset-left);
-            padding-right: env(safe-area-inset-right);
+            margin: 0;
+            padding: 0;
         }
 
         .container {
@@ -32,6 +30,11 @@
             width: 100%;
             overflow: hidden;
             position: relative;
+            /* safe-areaをcontainer内で処理 */
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            padding-left: env(safe-area-inset-left, 0px);
+            padding-right: env(safe-area-inset-right, 0px);
         }
 
         .sidebar {
@@ -332,7 +335,9 @@
         }
 
         .chat-header {
-            max-height: 85vh;
+            /* safe-areaを考慮した最大高さ */
+            max-height: calc(85vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+            max-height: calc(85dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
             overflow-y: auto;
             padding-right: 12px;
             padding: 20px;
@@ -606,7 +611,9 @@
             font-size: 14px;
             resize: none;
             min-height: 120px;
-            max-height: 60vh;
+            /* safe-areaを考慮した最大高さ */
+            max-height: calc(60vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+            max-height: calc(60dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
             font-family: inherit;
         }
 
@@ -1191,7 +1198,9 @@
 
             .message-input {
                 min-height: 110px;
-                max-height: 50vh;
+                /* safe-areaを考慮した最大高さ */
+                max-height: calc(50vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+                max-height: calc(50dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
             }
 
             .system-prompt-header {
@@ -1684,6 +1693,19 @@
             let startY = 0;
             let startHeight = 0;
 
+            // safe-areaを考慮した最大高さを計算する関数
+            function getMaxInputHeight() {
+                // containerの実際の高さを使用（safe-areaが考慮されている）
+                const container = document.querySelector('.container');
+                const containerHeight = container ? container.clientHeight : window.innerHeight;
+
+                // モバイルかどうかを判定
+                const isMobile = window.innerWidth <= 768;
+                const maxHeightRatio = isMobile ? 0.5 : 0.6;
+
+                return containerHeight * maxHeightRatio;
+            }
+
             resizeHandle.addEventListener('mousedown', (e) => {
                 isResizing = true;
                 startY = e.clientY;
@@ -1702,7 +1724,7 @@
 
                 // min-heightとmax-heightの制約を適用
                 const minHeight = 120;
-                const maxHeight = window.innerHeight * 0.6;
+                const maxHeight = getMaxInputHeight();
                 const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
 
                 messageInput.style.flex = 'none';
@@ -1732,7 +1754,7 @@
                 const newHeight = startHeight + deltaY;
 
                 const minHeight = 120;
-                const maxHeight = window.innerHeight * 0.6;
+                const maxHeight = getMaxInputHeight();
                 const constrainedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
 
                 messageInput.style.flex = 'none';
