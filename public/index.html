@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>OpenAI API UI</title>
     <style>
         * {
@@ -19,6 +19,9 @@
             height: 100dvh; /* 動的なビューポート高さ（モバイルのUIを考慮） */
             overflow: hidden;
             display: flex;
+            padding-top: env(safe-area-inset-top);
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
         }
 
         .container {
@@ -911,6 +914,8 @@
                 overflow-y: auto;
                 box-shadow: 0 0 20px rgba(0, 0, 0, 0.4);
                 background: #222;
+                padding-top: env(safe-area-inset-top);
+                padding-bottom: env(safe-area-inset-bottom);
             }
 
             .sidebar {
