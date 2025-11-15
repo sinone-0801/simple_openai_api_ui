@@ -39,8 +39,48 @@
             border-right: 1px solid #3a3a3a;
             display: flex;
             flex-direction: column;
-            transition: transform 0.3s ease;
+            transition: width 0.3s ease, transform 0.3s ease;
             z-index: 15;
+            position: relative;
+        }
+
+        .sidebar.collapsed {
+            width: 40px;
+        }
+
+        .sidebar.collapsed .sidebar-header,
+        .sidebar.collapsed .threads-list {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .sidebar-collapse-btn {
+            position: absolute;
+            top: 50%;
+            right: -15px;
+            transform: translateY(-50%);
+            width: 30px;
+            height: 60px;
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 0 8px 8px 0;
+            color: #e0e0e0;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            z-index: 10;
+            transition: background 0.2s;
+        }
+
+        .sidebar-collapse-btn:hover {
+            background: #333;
+        }
+
+        .sidebar.collapsed .sidebar-collapse-btn {
+            right: -15px;
+            border-radius: 0 8px 8px 0;
         }
 
         .sidebar-close-btn {
@@ -91,6 +131,7 @@
             background: #333;
             border-radius: 6px;
             margin-top: 15px;
+            position: relative;
         }
 
         .token-usage-title {
@@ -98,6 +139,39 @@
             font-weight: 600;
             color: #aaa;
             margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .panel-toggle-btn {
+            background: transparent;
+            border: none;
+            color: #999;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 3px;
+            transition: background 0.2s;
+        }
+
+        .panel-toggle-btn:hover {
+            background: #444;
+            color: #fff;
+        }
+
+        .collapsible-panel {
+            overflow: hidden;
+            transition: max-height 0.3s ease, opacity 0.3s ease;
+            max-height: 500px;
+            opacity: 1;
+        }
+
+        .collapsible-panel.collapsed {
+            max-height: 0;
+            opacity: 0;
+            margin: 0;
+            padding: 0;
         }
 
         .token-usage-item {
@@ -607,8 +681,48 @@
             border-left: 1px solid #3a3a3a;
             display: flex;
             flex-direction: column;
-            transition: transform 0.3s ease;
+            transition: width 0.3s ease, transform 0.3s ease;
             z-index: 15;
+            position: relative;
+        }
+
+        .artifacts-panel.collapsed {
+            width: 40px;
+        }
+
+        .artifacts-panel.collapsed .artifacts-header,
+        .artifacts-panel.collapsed .artifacts-list {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .artifacts-collapse-btn {
+            position: absolute;
+            top: 50%;
+            left: -15px;
+            transform: translateY(-50%);
+            width: 30px;
+            height: 60px;
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px 0 0 8px;
+            color: #e0e0e0;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            z-index: 10;
+            transition: background 0.2s;
+        }
+
+        .artifacts-collapse-btn:hover {
+            background: #333;
+        }
+
+        .artifacts-panel.collapsed .artifacts-collapse-btn {
+            left: -15px;
+            border-radius: 8px 0 0 8px;
         }
 
         .artifacts-close-btn {
@@ -892,6 +1006,14 @@
             display: none;
         }
 
+        /* PC版：サイドバー折りたたみボタンを表示 */
+        @media (min-width: 1025px) {
+            .sidebar-collapse-btn,
+            .artifacts-collapse-btn {
+                display: flex;
+            }
+        }
+
         @media (max-width: 1024px) {
             body {
                 flex-direction: column;
@@ -1055,15 +1177,24 @@
     <div class="container">
         <!-- 左サイドバー：スレッド一覧 -->
         <div class="sidebar" id="leftSidebar">
+            <button class="sidebar-collapse-btn" onclick="toggleSidebarCollapse('left')" aria-label="サイドバーを折りたたむ">
+                <span id="leftSidebarCollapseIcon">‹</span>
+            </button>
             <div class="sidebar-header">
                 <button class="sidebar-close-btn" onclick="closeSidebars()" aria-label="サイドバーを閉じる">✕</button>
                 <h1>OpenAI API UI</h1>
                 <button class="new-thread-btn" onclick="showNewThreadModal()">+ 新規スレッド</button>
-                
+
                 <!-- トークン使用量パネル -->
-                <div class="token-usage-panel">
-                    <div class="token-usage-title">トークン使用量 (24h)</div>
-                    
+                <div class="token-usage-panel" id="tokenUsagePanel">
+                    <div class="token-usage-title">
+                        <span>トークン使用量 (24h)</span>
+                        <button class="panel-toggle-btn" onclick="togglePanel('tokenUsage')" aria-label="トークン使用量パネルを折りたたむ">
+                            <span id="tokenUsageToggleIcon">▼</span>
+                        </button>
+                    </div>
+
+                    <div class="collapsible-panel" id="tokenUsageContent">
                     <div class="token-usage-item">
                         <div class="token-usage-label">High Cost Models (1M/day)</div>
                         <div class="token-usage-bar">
@@ -1085,12 +1216,19 @@
                             <span id="lowCostPercent">0%</span>
                         </div>
                     </div>
+                    </div>
                 </div>
 
                 <!-- クレジット残高パネル -->
-                <div class="token-usage-panel">
-                    <div class="token-usage-title">クレジット残高</div>
-                    
+                <div class="token-usage-panel" id="creditPanel">
+                    <div class="token-usage-title">
+                        <span>クレジット残高</span>
+                        <button class="panel-toggle-btn" onclick="togglePanel('credit')" aria-label="クレジット残高パネルを折りたたむ">
+                            <span id="creditToggleIcon">▼</span>
+                        </button>
+                    </div>
+
+                    <div class="collapsible-panel" id="creditContent">
                     <div class="token-usage-item">
                         <div class="token-usage-label">残クレジット</div>
                         <div class="token-usage-bar">
@@ -1100,6 +1238,7 @@
                             <span id="creditAmount">0</span>
                             <span id="creditText"></span>
                         </div>
+                    </div>
                     </div>
                 </div>
             </div>
@@ -1208,6 +1347,9 @@
 
         <!-- 右サイドバー：アーティファクト -->
         <div class="artifacts-panel" id="rightSidebar">
+            <button class="artifacts-collapse-btn" onclick="toggleSidebarCollapse('right')" aria-label="サイドバーを折りたたむ">
+                <span id="rightSidebarCollapseIcon">›</span>
+            </button>
             <div class="artifacts-header">
                 <button class="artifacts-close-btn" onclick="closeSidebars()" aria-label="サイドバーを閉じる">✕</button>
                 <h3>アーティファクト</h3>
@@ -1418,17 +1560,29 @@
             if (sidebarHeader && !document.getElementById('userInfo')) {
                 const userInfoDiv = document.createElement('div');
                 userInfoDiv.id = 'userInfo';
-                userInfoDiv.style.cssText = 'margin-top: 15px; padding: 10px; background: #333; border-radius: 6px; font-size: 12px;';
-                
+                userInfoDiv.className = 'token-usage-panel';
+                userInfoDiv.style.cssText = 'margin-top: 15px;';
+
                 userInfoDiv.innerHTML = `
-                    <div style="color: #999; margin-bottom: 4px;">ログイン中</div>
-                    <div style="color: #e0e0e0; font-weight: 500; margin-bottom: 8px;">${user.user_id}</div>
-                    <button onclick="logout()" style="width: 100%; padding: 6px; background: #444; border: none; border-radius: 4px; color: #e0e0e0; cursor: pointer; font-size: 12px;">
-                        ログアウト
-                    </button>
+                    <div class="token-usage-title">
+                        <span>ユーザー情報</span>
+                        <button class="panel-toggle-btn" onclick="togglePanel('userInfo')" aria-label="ユーザー情報パネルを折りたたむ">
+                            <span id="userInfoToggleIcon">▼</span>
+                        </button>
+                    </div>
+                    <div class="collapsible-panel" id="userInfoContent">
+                        <div style="color: #999; margin-bottom: 4px;">ログイン中</div>
+                        <div style="color: #e0e0e0; font-weight: 500; margin-bottom: 8px;">${user.user_id}</div>
+                        <button onclick="logout()" style="width: 100%; padding: 6px; background: #444; border: none; border-radius: 4px; color: #e0e0e0; cursor: pointer; font-size: 12px;">
+                            ログアウト
+                        </button>
+                    </div>
                 `;
-                
+
                 sidebarHeader.appendChild(userInfoDiv);
+
+                // 初期化後にパネル状態を適用
+                setTimeout(() => initPanelStates(), 0);
             }
         }
 
@@ -2570,7 +2724,84 @@
             }
         }
 
+        // パネル折りたたみ機能（モバイル版）
+        function togglePanel(panelName) {
+            const content = document.getElementById(`${panelName}Content`);
+            const icon = document.getElementById(`${panelName}ToggleIcon`);
+
+            if (!content || !icon) return;
+
+            const isCollapsed = content.classList.toggle('collapsed');
+            icon.textContent = isCollapsed ? '▶' : '▼';
+
+            // 状態を保存
+            localStorage.setItem(`panel_${panelName}_collapsed`, isCollapsed);
+        }
+
+        // サイドバー折りたたみ機能（PC版）
+        function toggleSidebarCollapse(side) {
+            if (side === 'left') {
+                const sidebar = document.getElementById('leftSidebar');
+                const icon = document.getElementById('leftSidebarCollapseIcon');
+                const isCollapsed = sidebar.classList.toggle('collapsed');
+                icon.textContent = isCollapsed ? '›' : '‹';
+                localStorage.setItem('sidebar_left_collapsed', isCollapsed);
+            } else if (side === 'right') {
+                const panel = document.getElementById('rightSidebar');
+                const icon = document.getElementById('rightSidebarCollapseIcon');
+                const isCollapsed = panel.classList.toggle('collapsed');
+                icon.textContent = isCollapsed ? '‹' : '›';
+                localStorage.setItem('sidebar_right_collapsed', isCollapsed);
+            }
+        }
+
+        // パネル状態の初期化
+        function initPanelStates() {
+            const isMobile = window.innerWidth <= 1024;
+
+            // モバイルではデフォルトで折りたたむ
+            const panels = ['tokenUsage', 'credit', 'userInfo'];
+            panels.forEach(panelName => {
+                const content = document.getElementById(`${panelName}Content`);
+                const icon = document.getElementById(`${panelName}ToggleIcon`);
+
+                if (!content || !icon) return;
+
+                // localStorage から状態を取得、または isMobile なら折りたたむ
+                const savedState = localStorage.getItem(`panel_${panelName}_collapsed`);
+                const shouldCollapse = savedState !== null ? savedState === 'true' : isMobile;
+
+                if (shouldCollapse) {
+                    content.classList.add('collapsed');
+                    icon.textContent = '▶';
+                } else {
+                    content.classList.remove('collapsed');
+                    icon.textContent = '▼';
+                }
+            });
+
+            // PC版サイドバーの状態を復元
+            if (!isMobile) {
+                const leftCollapsed = localStorage.getItem('sidebar_left_collapsed') === 'true';
+                const rightCollapsed = localStorage.getItem('sidebar_right_collapsed') === 'true';
+
+                if (leftCollapsed) {
+                    document.getElementById('leftSidebar')?.classList.add('collapsed');
+                    const icon = document.getElementById('leftSidebarCollapseIcon');
+                    if (icon) icon.textContent = '›';
+                }
+
+                if (rightCollapsed) {
+                    document.getElementById('rightSidebar')?.classList.add('collapsed');
+                    const icon = document.getElementById('rightSidebarCollapseIcon');
+                    if (icon) icon.textContent = '‹';
+                }
+            }
+        }
+
         init();
+        initPanelStates();
+        window.addEventListener('resize', initPanelStates);
     </script>
 </body>
 </html>
