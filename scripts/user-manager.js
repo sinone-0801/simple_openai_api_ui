@@ -617,7 +617,7 @@ async function exportToCSV() {
   console.log('-'.repeat(60));
 
   const filename = await question('\n出力ファイル名 (デフォルト: users_export.csv): ');
-  const filepath = path.join(__dirname, 'data', filename.trim() || 'users_export.csv');
+  const filepath = path.join(__dirname, '../data', filename.trim() || 'users_export.csv');
 
   try {
     const users = await auth.getAllUsers();
