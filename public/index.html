@@ -1403,6 +1403,233 @@
                 gap: 6px;
             }
         }
+
+        /* Loading Spinner Styles */
+        .loading-spinner-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            pointer-events: none; /* オーバーレイをクリックスルー可能に */
+        }
+
+        .loading-spinner-overlay.active {
+            display: flex;
+            background: transparent; /* 背景を透明に */
+        }
+
+        .loading-spinner-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            background: #2a2a2a;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            pointer-events: auto; /* スピナーコンテンツはクリック可能に */
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #333;
+            border-top: 4px solid #0066cc;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* ローディング中のスレッドアイテムのスタイル */
+        .thread-item.loading {
+            opacity: 0.8;
+            position: relative;
+        }
+
+        .thread-item.loading::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 3px;
+            height: 100%;
+            background: linear-gradient(180deg, #0066cc, #00aaff);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .loading-icon {
+            display: inline-block;
+            animation: bounce 1s ease-in-out infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-3px); }
+        }
+
+        .loading-text {
+            color: #e0e0e0;
+            font-size: 16px;
+            font-weight: 500;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Toast Notification Styles */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: none;
+        }
+
+        .toast {
+            background: #2a2a2a;
+            color: #e0e0e0;
+            padding: 16px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            min-width: 300px;
+            max-width: 400px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            pointer-events: auto;
+            animation: slideIn 0.3s ease-out;
+            border-left: 4px solid #0066cc;
+        }
+
+        .toast.success {
+            border-left-color: #00aa55;
+        }
+
+        .toast.error {
+            border-left-color: #cc0000;
+        }
+
+        .toast.warning {
+            border-left-color: #ff8800;
+        }
+
+        .toast-icon {
+            font-size: 24px;
+            flex-shrink: 0;
+        }
+
+        .toast.success .toast-icon {
+            color: #00aa55;
+        }
+
+        .toast.error .toast-icon {
+            color: #cc0000;
+        }
+
+        .toast.warning .toast-icon {
+            color: #ff8800;
+        }
+
+        .toast-content {
+            flex: 1;
+        }
+
+        .toast-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+            font-size: 14px;
+        }
+
+        .toast-message {
+            font-size: 13px;
+            color: #aaa;
+        }
+
+        .toast-close {
+            background: transparent;
+            border: none;
+            color: #999;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: background 0.2s, color 0.2s;
+            flex-shrink: 0;
+        }
+
+        .toast-close:hover {
+            background: #444;
+            color: #fff;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+        }
+
+        .toast.removing {
+            animation: slideOut 0.3s ease-out forwards;
+        }
+
+        @media (max-width: 600px) {
+            .toast-container {
+                top: 10px;
+                right: 10px;
+                left: 10px;
+            }
+
+            .toast {
+                min-width: unset;
+                max-width: unset;
+            }
+
+            .loading-spinner-content {
+                padding: 30px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1712,6 +1939,17 @@
         </div>
     </div>
 
+
+    <!-- Loading Spinner -->
+    <div id="loadingSpinner" class="loading-spinner-overlay">
+        <div class="loading-spinner-content">
+            <div class="spinner"></div>
+            <div class="loading-text">回答を生成中...</div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toastContainer" class="toast-container"></div>
     <script>
         // ====================
         // 認証機能
@@ -1890,6 +2128,12 @@
         let artifactDropzoneUpdater = null;
         const MOBILE_BREAKPOINT = 600;
         let isMobileViewport = null;
+        
+        // スレッドごとのローディング状態を管理
+        const threadLoadingStates = new Map(); // threadId -> boolean
+        
+        // スレッドごとの送信待機中/失敗したメッセージを管理
+        const threadPendingMessages = new Map(); // threadId -> { message: string, timestamp: number }
 
         function initResizeHandle() {
             const resizeHandle = document.getElementById('resizeHandle');
@@ -2177,13 +2421,19 @@
                 
                 threadsList.innerHTML = data.threads
                     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
-                    .map(thread => `
-                        <div class="thread-item ${thread.id === currentThreadId ? 'active' : ''}" 
-                             onclick="loadThread('${thread.id}')">
-                            <div class="thread-item-title">${escapeHtml(thread.title)}</div>
-                            <div class="thread-item-date">${formatDate(thread.updatedAt)}</div>
-                        </div>
-                    `).join('');
+                    .map(thread => {
+                        const isLoading = threadLoadingStates.get(thread.id) || false;
+                        const loadingIcon = isLoading ? '<span class="loading-icon" style="margin-left: 8px;">⏳</span>' : '';
+                        
+                        return `
+                            <div class="thread-item ${thread.id === currentThreadId ? 'active' : ''} ${isLoading ? 'loading' : ''}" 
+                                 data-thread-id="${thread.id}"
+                                 onclick="loadThread('${thread.id}')">
+                                <div class="thread-item-title">${escapeHtml(thread.title)}${loadingIcon}</div>
+                                <div class="thread-item-date">${formatDate(thread.updatedAt)}</div>
+                            </div>
+                        `;
+                    }).join('');
             } catch (error) {
                 console.error('Failed to load threads:', error);
             }
@@ -2263,6 +2513,40 @@
                 });
                 
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                
+                // =======================================
+                // input-areaのメッセージ管理
+                // =======================================
+                const input = document.getElementById('messageInput');
+                const sendBtn = document.getElementById('sendBtn');
+                
+                if (input && sendBtn) {
+                    // このスレッドがローディング中かチェック
+                    const isLoading = threadLoadingStates.get(threadId) || false;
+                    
+                    if (isLoading) {
+                        // ローディング中: inputとボタンを無効化
+                        input.disabled = true;
+                        sendBtn.disabled = true;
+                        sendBtn.textContent = '送信中...';
+                    } else {
+                        // ローディング中でない: inputとボタンを有効化
+                        input.disabled = false;
+                        sendBtn.disabled = false;
+                        sendBtn.textContent = '送信';
+                    }
+                    
+                    // メッセージの復帰/クリア
+                    const pendingMessage = threadPendingMessages.get(threadId);
+                    if (pendingMessage) {
+                        // 待機中/失敗したメッセージを復帰
+                        input.value = pendingMessage.message;
+                    } else {
+                        // メッセージがない場合はクリア
+                        input.value = '';
+                    }
+                }
+                
                 await loadThreads();
                 await loadArtifacts();
                 artifactDropzoneUpdater?.(); // ドロップゾーンの表示状態を更新
@@ -2579,6 +2863,201 @@
             alert('そろそろ24hの無料利用枠を超えるので、しばらく待ってね！');
         }
 
+        // ====================
+        // スピナーと通知機能
+        // ====================
+
+        // スピナーを表示
+        function showSpinner() {
+            const spinner = document.getElementById('loadingSpinner');
+            if (spinner) {
+                spinner.classList.add('active');
+            }
+        }
+
+        // スピナーを非表示
+        function hideSpinner() {
+            const spinner = document.getElementById('loadingSpinner');
+            if (spinner) {
+                spinner.classList.remove('active');
+            }
+        }
+
+        // =====================================
+        // スレッドごとのローディング状態管理
+        // =====================================
+        
+        // スレッドのローディング状態を設定
+        function setThreadLoading(threadId, isLoading) {
+            if (!threadId) return;
+            
+            threadLoadingStates.set(threadId, isLoading);
+            
+            // 現在表示中のスレッドの場合のみグローバルスピナーを制御
+            if (threadId === currentThreadId) {
+                if (isLoading) {
+                    showSpinner();
+                } else {
+                    hideSpinner();
+                }
+            }
+            
+            // スレッドリストにローディングインジケーターを表示
+            updateThreadListIndicator(threadId, isLoading);
+        }
+        
+        // スレッドリストのローディングインジケーターを更新
+        function updateThreadListIndicator(threadId, isLoading) {
+            const threadsList = document.getElementById('threadsList');
+            if (!threadsList) return;
+            
+            const threadItems = threadsList.querySelectorAll('.thread-item');
+            threadItems.forEach(item => {
+                const itemThreadId = item.getAttribute('data-thread-id');
+                if (itemThreadId === threadId) {
+                    if (isLoading) {
+                        item.classList.add('loading');
+                        // ローディングアイコンを追加
+                        if (!item.querySelector('.loading-icon')) {
+                            const icon = document.createElement('span');
+                            icon.className = 'loading-icon';
+                            icon.textContent = '⏳';
+                            icon.style.marginLeft = '8px';
+                            item.querySelector('.thread-item-title')?.appendChild(icon);
+                        }
+                    } else {
+                        item.classList.remove('loading');
+                        const icon = item.querySelector('.loading-icon');
+                        if (icon) icon.remove();
+                    }
+                }
+            });
+        }
+        
+        // スレッドタイトルを取得
+        function getThreadTitle(threadId) {
+            const threadsList = document.getElementById('threadsList');
+            if (!threadsList) return 'スレッド';
+            
+            const threadItems = threadsList.querySelectorAll('.thread-item');
+            for (const item of threadItems) {
+                const itemThreadId = item.getAttribute('data-thread-id');
+                if (itemThreadId === threadId) {
+                    const titleElement = item.querySelector('.thread-item-title');
+                    if (titleElement) {
+                        // ローディングアイコンを除外してタイトルを取得
+                        const clone = titleElement.cloneNode(true);
+                        const loadingIcon = clone.querySelector('.loading-icon');
+                        if (loadingIcon) loadingIcon.remove();
+                        return clone.textContent.trim();
+                    }
+                }
+            }
+            return 'スレッド';
+        }
+
+        // トースト通知を表示
+        function showToast(options) {
+            const {
+                title = '',
+                message = '',
+                type = 'info', // 'success', 'error', 'warning', 'info'
+                duration = 4000
+            } = options;
+
+            const container = document.getElementById('toastContainer');
+            if (!container) return;
+
+            // トースト要素を作成
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+
+            // アイコンを決定
+            const icons = {
+                success: '✓',
+                error: '✕',
+                warning: '⚠',
+                info: 'ℹ'
+            };
+            const icon = icons[type] || icons.info;
+
+            // トースト内容を設定
+            toast.innerHTML = `
+                <div class="toast-icon">${icon}</div>
+                <div class="toast-content">
+                    ${title ? `<div class="toast-title">${escapeHtml(title)}</div>` : ''}
+                    ${message ? `<div class="toast-message">${escapeHtml(message)}</div>` : ''}
+                </div>
+                <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+            `;
+
+            // トーストをコンテナに追加
+            container.appendChild(toast);
+
+            // 自動削除（クローズボタンクリックでも削除可能）
+            if (duration > 0) {
+                setTimeout(() => {
+                    if (toast.parentElement) {
+                        toast.classList.add('removing');
+                        setTimeout(() => {
+                            if (toast.parentElement) {
+                                toast.remove();
+                            }
+                        }, 300);
+                    }
+                }, duration);
+            }
+
+            return toast;
+        }
+
+        // 通知のショートカット関数
+        function notifySuccess(title, message, duration) {
+            return showToast({ title, message, type: 'success', duration });
+        }
+
+        function notifyError(title, message, duration) {
+            return showToast({ title, message, type: 'error', duration });
+        }
+
+        function notifyWarning(title, message, duration) {
+            return showToast({ title, message, type: 'warning', duration });
+        }
+
+        function notifyInfo(title, message, duration) {
+            return showToast({ title, message, type: 'info', duration });
+        }
+
+        // Notification APIもサポート（ブラウザ通知）
+        async function requestNotificationPermission() {
+            if (!('Notification' in window)) {
+                console.log('このブラウザは通知をサポートしていません');
+                return false;
+            }
+
+            if (Notification.permission === 'granted') {
+                return true;
+            }
+
+            if (Notification.permission !== 'denied') {
+                const permission = await Notification.requestPermission();
+                return permission === 'granted';
+            }
+
+            return false;
+        }
+
+        // ブラウザ通知を送信
+        function sendBrowserNotification(title, options = {}) {
+            if (Notification.permission === 'granted') {
+                return new Notification(title, {
+                    icon: '/favicon.ico',
+                    badge: '/favicon.ico',
+                    ...options
+                });
+            }
+        }
+
         async function sendMessage(event) {
             event.preventDefault();
             if (!currentThreadId) return;
@@ -2587,14 +3066,29 @@
             const content = input.value.trim();
             if (!content) return;
 
+            // 重要: スレッドIDを保存（スレッド切り替えに対応）
+            const messageThreadId = currentThreadId;
+
             const sendBtn = document.getElementById('sendBtn');
             const originalText = sendBtn.textContent;
             sendBtn.disabled = true;
             sendBtn.textContent = '送信中...';
             input.disabled = true;
 
+            // スレッドタイトルを取得
+            const threadTitle = getThreadTitle(messageThreadId);
+            
+            // メッセージを一時保存（待機中/失敗時のため）
+            threadPendingMessages.set(messageThreadId, {
+                message: content,
+                timestamp: Date.now()
+            });
+            
+            // このスレッドのローディング状態を設定
+            setThreadLoading(messageThreadId, true);
+
             try {
-                const response = await authFetch(`./api/threads/${currentThreadId}/messages`, {
+                const response = await authFetch(`./api/threads/${messageThreadId}/messages`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content })
@@ -2605,6 +3099,8 @@
                         await response.json();
                     } catch (_) {}
                     showUsageLimitPopup();
+                    // 制限エラーの通知
+                    notifyWarning('使用制限', '使用制限に達しました。しばらくしてからお試しください。', 5000);
                     return;
                 }
 
@@ -2613,23 +3109,59 @@
                     try {
                         errorData = await response.json();
                     } catch (_) {}
-                    throw new Error(errorData?.error || 'メッセージの送信に失敗しました');
+                    const errorMessage = errorData?.error || 'メッセージの送信に失敗しました';
+                    
+                    // スレッド情報を含むエラー通知
+                    notifyError(`送信失敗 - ${threadTitle}`, errorMessage, 5000);
+                    
+                    // ブラウザ通知（スレッド情報を含む）
+                    sendBrowserNotification(`エラー - ${threadTitle}`, {
+                        body: errorMessage,
+                        tag: `message-error-${messageThreadId}`
+                    });
+                    
+                    throw new Error(errorMessage);
                 }
 
                 await response.json();
-                input.value = '';
-                await loadThread(currentThreadId);
+                
+                // 成功時: 一時保存したメッセージを削除
+                threadPendingMessages.delete(messageThreadId);
+                
+                // 現在表示中のスレッドの場合のみinputをクリア
+                if (currentThreadId === messageThreadId) {
+                    input.value = '';
+                }
+                
+                await loadThread(messageThreadId);
                 await loadThreads();
                 await loadArtifacts();
                 artifactDropzoneUpdater?.(); // ドロップゾーンの表示状態を更新
+                
+                // スレッド情報を含む成功通知
+                notifySuccess(`回答完了 - ${threadTitle}`, 'AIからの回答が生成されました', 10000);
+                
+                // ブラウザ通知（スレッド情報を含む）
+                sendBrowserNotification(`回答完了 - ${threadTitle}`, {
+                    body: `「${threadTitle}」での回答が生成されました`,
+                    tag: `message-success-${messageThreadId}`
+                });
+                
             } catch (error) {
                 console.error('Failed to send message:', error);
-                alert(`エラー: ${error.message}`);
+                // エラー時: threadPendingMessagesにメッセージを残す（既に保存済み）
             } finally {
-                sendBtn.disabled = false;
-                sendBtn.textContent = originalText;
-                input.disabled = false;
-                input.focus();
+                // messageThreadIdを使用（currentThreadIdが変わっている可能性があるため）
+                setThreadLoading(messageThreadId, false);
+                
+                // 現在表示中のスレッドが送信したスレッドと同じ場合のみinputとsendBtnを有効化
+                if (currentThreadId === messageThreadId) {
+                    sendBtn.disabled = false;
+                    sendBtn.textContent = originalText;
+                    input.disabled = false;
+                    input.focus();
+                }
+                
                 await loadTokenUsage();
                 await loadCreditInfo(); // クレジット情報を更新
             }
@@ -3199,6 +3731,8 @@
         }
 
         init();
+        // 通知の許可をリクエスト（オプション）
+        requestNotificationPermission();
         initPanelStates();
         window.addEventListener('resize', initPanelStates);
     </script>
