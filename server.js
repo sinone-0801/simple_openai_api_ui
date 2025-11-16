@@ -230,6 +230,7 @@ const DATA_DIR = path.join(__dirname, 'data');
 const ARTIFACTS_DIR = path.join(__dirname, 'artifacts');
 const THREADS_FILE = path.join(DATA_DIR, 'threads.json');
 const TOKEN_LOG_FILE = path.join(DATA_DIR, 'token_usage.csv');
+const SYSTEM_PROMPTS_FILE = path.join(DATA_DIR, 'system_prompts.json');
 
 await fs.mkdir(DATA_DIR, { recursive: true });
 await fs.mkdir(ARTIFACTS_DIR, { recursive: true });
@@ -250,6 +251,73 @@ async function initTokenLog() {
 }
 
 await initTokenLog();
+
+// ====================
+// システムプロンプト管理機能
+// ====================
+
+// システムプロンプトのハッシュを生成
+function generatePromptHash(content) {
+  return crypto.createHash('sha256').update(content, 'utf-8').digest('hex').substring(0, 16);
+}
+
+// システムプロンプトファイルの初期化
+async function initSystemPrompts() {
+  try {
+    await fs.access(SYSTEM_PROMPTS_FILE);
+  } catch {
+    await fs.writeFile(SYSTEM_PROMPTS_FILE, JSON.stringify({}, null, 2));
+  }
+}
+
+// システムプロンプトを読み込み
+async function readSystemPrompts() {
+  try {
+    const data = await fs.readFile(SYSTEM_PROMPTS_FILE, 'utf-8');
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
+}
+
+// システムプロンプトを保存
+async function writeSystemPrompts(prompts) {
+  await fs.writeFile(SYSTEM_PROMPTS_FILE, JSON.stringify(prompts, null, 2));
+}
+
+// システムプロンプトを登録（バージョン管理）
+async function registerSystemPrompt(content) {
+  if (!content || typeof content !== 'string') {
+    return null;
+  }
+
+  const hash = generatePromptHash(content);
+  const prompts = await readSystemPrompts();
+
+  if (!prompts[hash]) {
+    prompts[hash] = {
+      hash,
+      content,
+      createdAt: new Date().toISOString(),
+      usageCount: 0
+    };
+    await writeSystemPrompts(prompts);
+  }
+
+  // 使用回数をインクリメント
+  prompts[hash].usageCount++;
+  await writeSystemPrompts(prompts);
+
+  return hash;
+}
+
+// システムプロンプトを取得
+async function getSystemPrompt(hash) {
+  const prompts = await readSystemPrompts();
+  return prompts[hash] || null;
+}
+
+await initSystemPrompts();
 
 // トークン使用量をログに記録
 async function logTokenUsage(model, usage, userId = null) {
@@ -999,6 +1067,7 @@ app.post('/api/threads', requireAuth, async (req, res) => {
     const newThreadSummary = {
       id: threadId,
       title: title || 'New Thread',
+      userId: req.user.user_id,
       createdAt: timestamp,
       updatedAt: timestamp,
       artifactIds: []
@@ -1008,6 +1077,7 @@ app.post('/api/threads', requireAuth, async (req, res) => {
       id: threadId,
       title: newThreadSummary.title,
       systemPromptUser: userPrompt,
+      userId: req.user.user_id,
       systemPrompt: composeSystemPrompt(userPrompt, []),
       model: modelValidation.model,
       messages: [],
@@ -1448,6 +1518,8 @@ If start_pattern matches multiple locations, the operation is applied to all mat
         }
 
         const response = await client.responses.create(requestParams);
+        console.log(requestParams);
+        console.log(response);
 
         console.log(`Received response from ${selectedModel}`);
         
@@ -1966,6 +2038,18 @@ If start_pattern matches multiple locations, the operation is applied to all mat
         }
       }
 
+      // システムプロンプトをバージョン管理システムに登録
+      const systemPromptHash = await registerSystemPrompt(developerPrompt);
+
+      // Usage情報の拡張
+      const rawUsage = finalResponse?.usage || {};
+      const inputTokens = rawUsage.input_tokens || 0;
+      const outputTokens = rawUsage.output_tokens || 0;
+      const totalTokens = rawUsage.total_tokens || (inputTokens + outputTokens);
+      const isHighCostModel = AVAILABLE_MODELS_HIGH_COST.includes(selectedModel);
+      const tokenCostRate = isHighCostModel ? TOKEN_COST_HIGH : TOKEN_COST_LOW;
+      const creditsUsed = totalTokens * tokenCostRate;
+
       // アシスタントの応答を追加
       assistantMessage = {
         id: generateId(),
@@ -1974,7 +2058,16 @@ If start_pattern matches multiple locations, the operation is applied to all mat
         model: selectedModel,
         timestamp: new Date().toISOString(),
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-        usage: finalResponse?.usage || undefined
+        usage: {
+          inputTokens,
+          outputTokens,
+          totalTokens,
+          creditsUsed,
+          isHighCost: isHighCostModel,
+          tokenCostRate,
+          systemPromptHash,
+          raw: rawUsage  // 元のusage情報も保持
+        }
       };
       
       console.log('📨 Final assistant message:', {
@@ -2038,6 +2131,58 @@ app.get('/api/threads/:threadId/messages', requireAuth, async (req, res) => {
     }
     
     res.json({ messages: thread.messages });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ====================
+// メッセージ使用統計 API
+// ====================
+
+// メッセージの使用統計を取得
+app.get('/api/threads/:threadId/messages/:messageId/usage', requireAuth, async (req, res) => {
+  try {
+    const { threadId, messageId } = req.params;
+    const thread = await readThread(threadId);
+    
+    if (!thread) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+    
+    const message = thread.messages.find(m => m.id === messageId);
+    
+    if (!message) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    
+    // assistantメッセージのみusage情報を持つ
+    if (message.role !== 'assistant' || !message.usage) {
+      return res.status(404).json({ error: 'Usage information not available for this message' });
+    }
+    
+    res.json({
+      messageId: message.id,
+      timestamp: message.timestamp,
+      model: message.model,
+      usage: message.usage
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// システムプロンプトの取得
+app.get('/api/system-prompts/:hash', requireAuth, async (req, res) => {
+  try {
+    const { hash } = req.params;
+    const prompt = await getSystemPrompt(hash);
+    
+    if (!prompt) {
+      return res.status(404).json({ error: 'System prompt not found' });
+    }
+    
+    res.json(prompt);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -582,6 +582,200 @@
             margin-top: 4px;
         }
 
+        .message-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .usage-info-btn {
+            background: transparent;
+            border: 1px solid #444;
+            color: #999;
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .usage-info-btn:hover {
+            background: #333;
+            color: #0066cc;
+            border-color: #0066cc;
+        }
+
+        .usage-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .usage-modal.active {
+            display: flex;
+        }
+
+        .usage-modal-content {
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 600px;
+            width: 100%;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .usage-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #3a3a3a;
+        }
+
+        .usage-modal-header h3 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #fff;
+            margin: 0;
+        }
+
+        .usage-modal-close {
+            background: transparent;
+            border: none;
+            color: #999;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .usage-modal-close:hover {
+            background: #333;
+            color: #fff;
+        }
+
+        .usage-stat-item {
+            margin-bottom: 16px;
+        }
+
+        .usage-stat-label {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+
+        .usage-stat-value {
+            font-size: 15px;
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+
+        .usage-stat-value.highlight {
+            color: #0066cc;
+            font-size: 16px;
+        }
+
+        .usage-stat-value.warning {
+            color: #ff8800;
+        }
+
+        .usage-stat-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .usage-stat-badge.high-cost {
+            background: #ff3333;
+            color: #fff;
+        }
+
+        .usage-stat-badge.low-cost {
+            background: #00d166;
+            color: #fff;
+        }
+
+        .system-prompt-section {
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid #3a3a3a;
+        }
+
+        .system-prompt-toggle {
+            background: transparent;
+            border: none;
+            color: #0066cc;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 8px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: color 0.2s;
+            width: 100%;
+            text-align: left;
+        }
+
+        .system-prompt-toggle:hover {
+            color: #0088ff;
+        }
+
+        .system-prompt-content {
+            margin-top: 12px;
+            padding: 12px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        .system-prompt-content.active {
+            display: block;
+        }
+
+        .system-prompt-content pre {
+            margin: 0;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #ccc;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .usage-loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
         .input-area {
             padding: 20px;
             display: flex;
@@ -1505,6 +1699,19 @@
         </div>
     </div>
 
+    <!-- Usage Info Modal -->
+    <div id="usageModal" class="usage-modal">
+        <div class="usage-modal-content">
+            <div class="usage-modal-header">
+                <h3>メッセージ使用統計</h3>
+                <button class="usage-modal-close" onclick="closeUsageModal()">×</button>
+            </div>
+            <div id="usageModalBody">
+                <div class="usage-loading">読み込み中...</div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // ====================
         // 認証機能
@@ -2032,13 +2239,26 @@
                     contentDiv.className = 'message-content';
                     contentDiv.innerHTML = formatMarkdownText(msg.content);
                     
+                    const metaDiv = document.createElement('div');
+                    metaDiv.className = 'message-meta';
+                    
                     const timestampDiv = document.createElement('div');
                     timestampDiv.className = 'message-timestamp';
                     timestampDiv.textContent = formatDateTime(msg.timestamp);
+                    metaDiv.appendChild(timestampDiv);
+                    
+                    // assistantメッセージでusage情報がある場合、usageボタンを追加
+                    if (msg.role === 'assistant' && msg.usage) {
+                        const usageBtn = document.createElement('button');
+                        usageBtn.className = 'usage-info-btn';
+                        usageBtn.innerHTML = 'ⓘ 使用統計';
+                        usageBtn.onclick = () => showUsageInfo(currentThreadId, msg.id);
+                        metaDiv.appendChild(usageBtn);
+                    }
                     
                     messageDiv.appendChild(headerDiv);
                     messageDiv.appendChild(contentDiv);
-                    messageDiv.appendChild(timestampDiv);
+                    messageDiv.appendChild(metaDiv);
                     messagesContainer.appendChild(messageDiv);
                 });
                 
@@ -2657,6 +2877,152 @@
 
         function formatDateTime(dateString) {
             return new Date(dateString).toLocaleString('ja-JP');
+        }
+
+        // ====================
+        // メッセージ使用統計モーダル関数
+        // ====================
+
+        async function showUsageInfo(threadId, messageId) {
+            const modal = document.getElementById('usageModal');
+            const modalBody = document.getElementById('usageModalBody');
+            
+            // モーダルを表示
+            modal.classList.add('active');
+            modalBody.innerHTML = '<div class="usage-loading">読み込み中...</div>';
+            
+            try {
+                // メッセージの使用統計を取得
+                const response = await authFetch(`./api/threads/${threadId}/messages/${messageId}/usage`);
+                
+                if (!response.ok) {
+                    throw new Error('使用統計の取得に失敗しました');
+                }
+                
+                const data = await response.json();
+                const usage = data.usage;
+                
+                // モーダルの内容を構築
+                let html = `
+                    <div class="usage-stat-item">
+                        <div class="usage-stat-label">モデル</div>
+                        <div class="usage-stat-value">
+                            ${escapeHtml(data.model)}
+                            <span class="usage-stat-badge ${usage.isHighCost ? 'high-cost' : 'low-cost'}">
+                                ${usage.isHighCost ? 'High Cost' : 'Low Cost'}
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="usage-stat-item">
+                        <div class="usage-stat-label">トークン使用量</div>
+                        <div class="usage-stat-value">
+                            ${formatTokens(usage.totalTokens)} tokens
+                            <div style="font-size: 13px; color: #999; margin-top: 4px;">
+                                入力: ${formatTokens(usage.inputTokens)} / 出力: ${formatTokens(usage.outputTokens)}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="usage-stat-item">
+                        <div class="usage-stat-label">クレジット消費</div>
+                        <div class="usage-stat-value highlight">
+                            ${formatTokens(usage.creditsUsed)} credits
+                            <div style="font-size: 12px; color: #999; margin-top: 4px;">
+                                レート: ${usage.tokenCostRate} credits/token
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="usage-stat-item">
+                        <div class="usage-stat-label">タイムスタンプ</div>
+                        <div class="usage-stat-value" style="font-size: 13px;">
+                            ${formatDateTime(data.timestamp)}
+                        </div>
+                    </div>
+                `;
+                
+                // システムプロンプトがある場合は追加
+                if (usage.systemPromptHash) {
+                    html += `
+                        <div class="system-prompt-section">
+                            <button class="system-prompt-toggle" onclick="toggleSystemPrompt('${usage.systemPromptHash}')">
+                                <span id="systemPromptToggleIcon">▶</span>
+                                システムプロンプトを表示
+                            </button>
+                            <div id="systemPromptContent" class="system-prompt-content">
+                                <div class="usage-loading">読み込み中...</div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                modalBody.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Failed to load usage info:', error);
+                modalBody.innerHTML = `
+                    <div style="text-align: center; padding: 40px; color: #ff5555;">
+                        <div style="font-size: 16px; margin-bottom: 8px;">エラーが発生しました</div>
+                        <div style="font-size: 13px; color: #999;">${escapeHtml(error.message)}</div>
+                    </div>
+                `;
+            }
+        }
+
+        function closeUsageModal() {
+            const modal = document.getElementById('usageModal');
+            modal.classList.remove('active');
+        }
+
+        // モーダルの背景クリックで閉じる
+        document.addEventListener('click', (e) => {
+            const modal = document.getElementById('usageModal');
+            if (e.target === modal) {
+                closeUsageModal();
+            }
+        });
+
+        async function toggleSystemPrompt(hash) {
+            const content = document.getElementById('systemPromptContent');
+            const icon = document.getElementById('systemPromptToggleIcon');
+            
+            if (content.classList.contains('active')) {
+                // 閉じる
+                content.classList.remove('active');
+                icon.textContent = '▶';
+            } else {
+                // 開く
+                content.classList.add('active');
+                icon.textContent = '▼';
+                
+                // まだロードしていない場合はロード
+                if (content.innerHTML.includes('読み込み中')) {
+                    try {
+                        const response = await authFetch(`./api/system-prompts/${hash}`);
+                        
+                        if (!response.ok) {
+                            throw new Error('システムプロンプトの取得に失敗しました');
+                        }
+                        
+                        const data = await response.json();
+                        
+                        content.innerHTML = `
+                            <div style="font-size: 11px; color: #666; margin-bottom: 8px;">
+                                作成: ${formatDateTime(data.createdAt)} | 使用回数: ${data.usageCount}回
+                            </div>
+                            <pre>${escapeHtml(data.content)}</pre>
+                        `;
+                    } catch (error) {
+                        console.error('Failed to load system prompt:', error);
+                        content.innerHTML = `
+                            <div style="color: #ff5555; font-size: 13px;">
+                                システムプロンプトの読み込みに失敗しました
+                            </div>
+                        `;
+                    }
+                }
+            }
         }
 
         function toggleLeftSidebar() {
