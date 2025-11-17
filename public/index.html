@@ -489,23 +489,38 @@
             display: none;
         }
 
-        .system-prompt-textarea {
-            min-height: 120px;
-            font-family: monospace;
-            background: #1e1e1e;
-        }
-
         .system-prompt-actions {
             display: flex;
             gap: 10px;
             justify-content: flex-end;
         }
 
+        .response-format-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 10px;
+        }
+
+        .reasoning-effort-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 10px;
+        }
+
         .system-prompt-section {
             background: #1f1f1f;
-            border: 1px solid #333;
             border-radius: 6px;
-            padding: 10px;
+            margin-top: 24px;
+            padding-top: 16px;
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-bottom: 10px;
+            border-top: 1px solid #3a3a3a;
+            border-left: 1px solid #333;
+            border-right: 1px solid #333;
+            border-bottom: 1px solid #333;
         }
 
         .system-prompt-section-title {
@@ -515,10 +530,73 @@
             color: #aaa;
         }
 
+        .system-prompt-toggle {
+            background: transparent;
+            border: none;
+            color: #0066cc;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 8px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: color 0.2s;
+            width: 100%;
+            text-align: left;
+        }
+
+        .system-prompt-toggle:hover {
+            color: #0088ff;
+        }
+
+        .system-prompt-content {
+            margin-top: 12px;
+            padding: 12px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        .system-prompt-content.active {
+            display: block;
+        }
+
+        .system-prompt-content pre {
+            margin: 0;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #ccc;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
         #systemPromptAutoPreview,
         #systemPromptEffectivePreview {
             max-height: 200px;
             overflow: auto;
+        }
+
+        .response-format-section-textarea {
+            min-height: 120px;
+            width: 100%;
+            min-height: 150px;
+            padding: 10px;
+            background: #333;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+        }
+
+        .response-format-section-description {
+            margin-top: 5px;
+            font-size: 11px;
+            color: #888;
         }
 
         .chat-area {
@@ -719,55 +797,6 @@
         .usage-stat-badge.low-cost {
             background: #00d166;
             color: #fff;
-        }
-
-        .system-prompt-section {
-            margin-top: 24px;
-            padding-top: 16px;
-            border-top: 1px solid #3a3a3a;
-        }
-
-        .system-prompt-toggle {
-            background: transparent;
-            border: none;
-            color: #0066cc;
-            font-size: 14px;
-            cursor: pointer;
-            padding: 8px 0;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            transition: color 0.2s;
-            width: 100%;
-            text-align: left;
-        }
-
-        .system-prompt-toggle:hover {
-            color: #0088ff;
-        }
-
-        .system-prompt-content {
-            margin-top: 12px;
-            padding: 12px;
-            background: #1a1a1a;
-            border: 1px solid #333;
-            border-radius: 6px;
-            max-height: 300px;
-            overflow-y: auto;
-            display: none;
-        }
-
-        .system-prompt-content.active {
-            display: block;
-        }
-
-        .system-prompt-content pre {
-            margin: 0;
-            font-size: 12px;
-            line-height: 1.5;
-            color: #ccc;
-            white-space: pre-wrap;
-            word-wrap: break-word;
         }
 
         .usage-loading {
@@ -1126,7 +1155,8 @@
 
         .form-input:focus,
         .form-textarea:focus,
-        .form-select:focus {
+        .form-select:focus,
+        .response-format-section-textarea:focus {
             outline: none;
             border-color: #0066cc;
         }
@@ -1741,7 +1771,7 @@
                     <div id="systemPromptWrapper" class="system-prompt-wrapper hidden">
                         <div id="systemPromptPanel" class="system-prompt-panel">
                             <label class="form-label">ユーザー編集可能なベースプロンプト</label>
-                            <textarea id="systemPromptUserInput" class="form-textarea system-prompt-textarea" spellcheck="false"></textarea>
+                            <textarea id="systemPromptUserInput" class="form-textarea" spellcheck="false"></textarea>
                             <div class="system-prompt-actions">
                                 <button id="systemPromptSaveBtn" class="btn btn-primary" onclick="saveSystemPrompt()" disabled>保存</button>
                                 <button class="btn btn-secondary" onclick="refreshSystemPrompt()" disabled>再読み込み</button>
@@ -1753,6 +1783,68 @@
                             <div class="system-prompt-section">
                                 <div class="system-prompt-section-title">送信時に利用されるシステムプロンプト</div>
                                 <pre><code id="systemPromptEffectivePreview"></code></pre>
+                            </div>
+                            <!-- response format (JsonSchema) -->
+                            <label for="responseFormatSchema" class="form-label">
+                                Response Format (JSON Schema) - オプション
+                            </label>
+                            <textarea 
+                                id="responseFormatSchema" class="response-format-section-textarea"
+                                placeholder='例:
+{
+  "type": "object",
+  "properties": {
+    "message": {
+        "type": "string",
+        "description": "ユーザーへのメッセージ"
+    },
+    "emotion": {
+      "type": "array",
+      "description": "あなたの感情（複数可）",
+      "items": {
+        "type": "object",
+        "description": "あなたの感情",
+        "properties": {
+          "emotion_type": {
+            "type": "string",
+            "enum": ["joy", "sad", "anger", "curious"],
+            "description": "あなたの感情の種類"
+          },
+          "intensity": {
+            "type": "integer",
+            "description": "あなたの感情の強度",
+            "minimum": 1,
+            "maximum": 5
+          }
+        }
+      }
+    }
+  },
+  "required": ["message", "emotion"]
+}'
+                            ></textarea>
+                            <div class="response-format-section-description">
+                                空欄の場合は通常のテキスト応答になります。JSON Schemaを指定すると、構造化されたJSON応答が返されます。
+                            </div>
+                            <div class="response-format-actions">
+                                <button id="responseFormatSaveBtn" class="btn btn-primary" onclick="saveResponseFormat()" disabled>保存</button>
+                                <button class="btn btn-secondary" onclick="refreshResponseFormat()" disabled>再読み込み</button>
+                            </div>
+                            <!-- Reasoning effort -->
+                            <label for="reasoningEffortSelect" class="form-label">
+                                Reasoning Effort (推論モデルのみ)
+                            </label>
+                            <select id="reasoningEffortSelect" class="form-select" style="width: 100%; padding: 8px; background: #333; border: 1px solid #444; border-radius: 4px; color: #e0e0e0;">
+                                <option value="low">Low - 高速・低精度</option>
+                                <option value="medium" selected>Medium - バランス</option>
+                                <option value="high">High - 低速・高精度</option>
+                            </select>
+                            <div style="font-size: 12px; color: #999; margin-top: 8px;">
+                                推論モデル（o1, o3, gpt-5など）でのみ有効です。非推論モデルでは無視されます。
+                            </div>
+                            <div class="reasoning-effort-actions">
+                                <button id="reasoningEffortSaveBtn" class="btn btn-primary" onclick="saveReasoningEffort()" disabled>保存</button>
+                                <button class="btn btn-secondary" onclick="refreshReasoningEffort()" disabled>再読み込み</button>
                             </div>
                         </div>
                     </div>
@@ -2474,6 +2566,36 @@
                     artifactInventory: thread.artifactInventory
                 });
 
+                // Response Formatの復元
+                if (thread.responseFormatHash) {
+                    try {
+                        const formatResponse = await authFetch(`./api/response-formats/${thread.responseFormatHash}`);
+                        if (formatResponse.ok) {
+                            const formatData = await formatResponse.json();
+                            const responseFormatTextarea = document.getElementById('responseFormatSchema');
+                            if (responseFormatTextarea && formatData.content) {
+                                responseFormatTextarea.value = typeof formatData.content === 'string' 
+                                    ? formatData.content 
+                                    : JSON.stringify(formatData.content, null, 2);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Failed to load response format:', error);
+                    }
+                } else {
+                    // Response Formatがない場合はクリア
+                    const responseFormatTextarea = document.getElementById('responseFormatSchema');
+                    if (responseFormatTextarea) {
+                        responseFormatTextarea.value = '';
+                    }
+                }
+
+                // Reasoning Effortの復元
+                const reasoningEffortSelect = document.getElementById('reasoningEffortSelect');
+                if (reasoningEffortSelect) {
+                    reasoningEffortSelect.value = thread.reasoningEffort || 'medium';
+                }
+
                 const messagesContainer = document.getElementById('messagesContainer');
                 messagesContainer.innerHTML = '';
                 
@@ -2487,7 +2609,7 @@
                     
                     const contentDiv = document.createElement('div');
                     contentDiv.className = 'message-content';
-                    contentDiv.innerHTML = formatMarkdownText(msg.content);
+                    contentDiv.innerHTML = formatMarkdownText(formatJsonResponse(msg.content));
                     
                     const metaDiv = document.createElement('div');
                     metaDiv.className = 'message-meta';
@@ -2660,6 +2782,12 @@
             const saveBtn = document.getElementById('systemPromptSaveBtn');
             const refreshBtn = document.querySelector('.system-prompt-actions .btn-secondary');
 
+            // Response Format と Reasoning Effort のボタン
+            const responseFormatSaveBtn = document.getElementById('responseFormatSaveBtn');
+            const responseFormatRefreshBtn = document.querySelector('.response-format-actions .btn-secondary');
+            const reasoningEffortSaveBtn = document.getElementById('reasoningEffortSaveBtn');
+            const reasoningEffortRefreshBtn = document.querySelector('.reasoning-effort-actions .btn-secondary');
+
             if (!userInput) return;
 
             userInput.value = systemPromptState.user;
@@ -2670,6 +2798,12 @@
             userInput.disabled = disabled;
             saveBtn.disabled = disabled;
             refreshBtn.disabled = disabled;
+
+            // Response Format と Reasoning Effort のボタンも有効化/無効化
+            if (responseFormatSaveBtn) responseFormatSaveBtn.disabled = disabled;
+            if (responseFormatRefreshBtn) responseFormatRefreshBtn.disabled = disabled;
+            if (reasoningEffortSaveBtn) reasoningEffortSaveBtn.disabled = disabled;
+            if (reasoningEffortRefreshBtn) reasoningEffortRefreshBtn.disabled = disabled;
         }
 
         async function fetchSystemPrompt() {
@@ -2701,6 +2835,107 @@
             }
         }
 
+        async function refreshSystemPrompt() {
+            if (!currentThreadId) return;
+            try {
+                await fetchSystemPrompt();
+                document.getElementById('systemPromptStatus').textContent = 'プロンプトを再読み込みしました (自動同期中)';
+            } catch (error) {
+                console.error('Failed to refresh system prompt:', error);
+                alert('システムプロンプトの再読み込みに失敗しました');
+            }
+        }
+
+        async function saveResponseFormat() {
+            if (!currentThreadId) return;
+            try {
+                const schemaText = document.getElementById('responseFormatSchema').value.trim();
+                let responseFormat = null;
+                
+                if (schemaText) {
+                    try {
+                        responseFormat = JSON.parse(schemaText);
+                    } catch (e) {
+                        alert('Response Format のJSON形式が不正です');
+                        return;
+                    }
+                }
+                
+                const response = await authFetch(`./api/threads/${currentThreadId}/response-format`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ responseFormat })
+                });
+                
+                const data = await response.json();
+                document.getElementById('responseFormatSchema').value = data.responseFormat ? JSON.stringify(data.responseFormat, null, 2) : '';
+                alert('Response Formatを保存しました');
+            } catch (error) {
+                console.error('Failed to save response format:', error);
+                alert('Response Formatの保存に失敗しました');
+            }
+        }
+
+        async function refreshResponseFormat() {
+            if (!currentThreadId) return;
+            try {
+                const response = await authFetch(`./api/threads/${currentThreadId}`);
+                const thread = await response.json();
+                
+                // Response Format Hash から実際のフォーマットを取得
+                if (thread.responseFormatHash) {
+                    const formatResponse = await authFetch(`./api/response-formats/${thread.responseFormatHash}`);
+                    if (formatResponse.ok) {
+                        const formatData = await formatResponse.json();
+                        const formatText = typeof formatData.content === 'string' 
+                            ? formatData.content 
+                            : JSON.stringify(formatData.content, null, 2);
+                        document.getElementById('responseFormatSchema').value = formatText;
+                    }
+                } else {
+                    document.getElementById('responseFormatSchema').value = '';
+                }
+                
+                alert('Response Formatを再読み込みしました');
+            } catch (error) {
+                console.error('Failed to refresh response format:', error);
+                alert('Response Formatの再読み込みに失敗しました');
+            }
+        }
+
+        async function saveReasoningEffort() {
+            if (!currentThreadId) return;
+            try {
+                const reasoningEffort = document.getElementById('reasoningEffortSelect').value;
+                
+                const response = await authFetch(`./api/threads/${currentThreadId}/reasoning-effort`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reasoningEffort })
+                });
+                
+                const data = await response.json();
+                document.getElementById('reasoningEffortSelect').value = data.reasoningEffort || 'medium';
+                alert('Reasoning Effortを保存しました');
+            } catch (error) {
+                console.error('Failed to save reasoning effort:', error);
+                alert('Reasoning Effortの保存に失敗しました');
+            }
+        }
+
+        async function refreshReasoningEffort() {
+            if (!currentThreadId) return;
+            try {
+                const response = await authFetch(`./api/threads/${currentThreadId}`);
+                const data = await response.json();
+                document.getElementById('reasoningEffortSelect').value = data.reasoningEffort || 'medium';
+                alert('Reasoning Effortを再読み込みしました');
+            } catch (error) {
+                console.error('Failed to refresh reasoning effort:', error);
+                alert('Reasoning Effortの再読み込みに失敗しました');
+            }
+        }
+        
         function getFileExtension(filename = '') {
             const lastDot = filename.lastIndexOf('.');
             if (lastDot === -1) return '';
@@ -3066,7 +3301,30 @@
             const content = input.value.trim();
             if (!content) return;
 
-            // 重要: スレッドIDを保存（スレッド切り替えに対応）
+            // JSON Schemaの取得
+            const responseFormatText = document.getElementById('responseFormatSchema').value.trim();
+            let responseFormat = null;
+            
+            if (responseFormatText) {
+                try {
+                    const parsedSchema = JSON.parse(responseFormatText);
+                    responseFormat = {
+                        name: "custom_response_schema",
+                        description: "User-defined response format",
+                        strict: false,
+                        schema: parsedSchema
+                    };
+                } catch (e) {
+                    console.error('Invalid JSON Schema:', e);
+                    alert('JSON Schemaの形式が正しくありません: ' + e.message);
+                    return;
+                }
+            }
+
+            // Reasoning Effortの取得
+            const reasoningEffort = document.getElementById('reasoningEffortSelect')?.value || 'medium';
+
+            // スレッドIDを保存（スレッド切り替えに対応）
             const messageThreadId = currentThreadId;
 
             const sendBtn = document.getElementById('sendBtn');
@@ -3091,9 +3349,13 @@
                 const response = await authFetch(`./api/threads/${messageThreadId}/messages`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ content })
+                    body: JSON.stringify({
+                        content: content,
+                        responseFormat: responseFormat,
+                        reasoningEffort: reasoningEffort
+                    })
                 });
-
+    
                 if (response.status === 429) {
                     try {
                         await response.json();
@@ -3409,6 +3671,70 @@
 
         function formatDateTime(dateString) {
             return new Date(dateString).toLocaleString('ja-JP');
+        }
+
+        // ====================
+        // JSON応答をマークダウン形式でフォーマット
+        // 形式: 「変数名: 値」で、objectやlistは改行とインデント（半角スペース4つ）
+        // ====================
+
+        function formatJsonResponse(jsonStr, indent = 0) {
+            const indentStr = '    '.repeat(indent);  // 半角スペース4つ × indent
+            let result = '';
+            let json = {};
+            try {
+                json = JSON.parse(jsonStr);
+            } catch (error) {
+                // テキスト
+                return String(jsonStr);
+            }
+
+            // プリミティブ型
+            if (typeof json !== 'object' || json === null) {
+                return String(json);
+            }
+            
+            // 配列の場合
+            if (Array.isArray(json)) {
+                if (json.length === 0) {
+                    return '';
+                }
+                for (let i = 0; i < json.length; i++) {
+                    const itemStr = formatJsonResponse(JSON.stringify(json[i]), indent + 1);
+                    const lines = itemStr.split('\n');
+                    for (const line of lines) {
+                        if (line.trim()) {
+                            result += indentStr + '    ' + line + '\n';
+                        }
+                    }
+                    if (i < json.length - 1) {
+                        result += indentStr + '    ---\n';  // 区切り線（オプション）
+                    }
+                }
+                return result;
+            }
+            
+            // オブジェクトの場合
+            const keys = Object.keys(json);
+            for (const key of keys) {
+                const value = json[key];
+                
+                if (typeof value === 'object' && value !== null) {
+                    // ネストされたオブジェクトや配列
+                    result += key + ':\n';
+                    const formattedValue = formatJsonResponse(JSON.stringify(value), indent + 1);
+                    const valueLines = formattedValue.split('\n');
+                    for (const line of valueLines) {
+                        if (line.trim()) {
+                            result += indentStr + '    ' + line + '\n';
+                        }
+                    }
+                } else {
+                    // プリミティブ値
+                    result += key + ': ' + value + '\n';
+                }
+            }
+            return result.trim();
         }
 
         // ====================

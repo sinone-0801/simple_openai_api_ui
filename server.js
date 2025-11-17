@@ -231,6 +231,7 @@ const ARTIFACTS_DIR = path.join(__dirname, 'artifacts');
 const THREADS_FILE = path.join(DATA_DIR, 'threads.json');
 const TOKEN_LOG_FILE = path.join(DATA_DIR, 'token_usage.csv');
 const SYSTEM_PROMPTS_FILE = path.join(DATA_DIR, 'system_prompts.json');
+const RESPONSE_FORMATS_FILE = path.join(DATA_DIR, 'response_formats.json');
 
 await fs.mkdir(DATA_DIR, { recursive: true });
 await fs.mkdir(ARTIFACTS_DIR, { recursive: true });
@@ -318,6 +319,72 @@ async function getSystemPrompt(hash) {
 }
 
 await initSystemPrompts();
+
+// ====================
+// Response Format管理機能
+// ====================
+
+// Response Formatのハッシュを生成
+function generateResponseFormatHash(content) {
+  const contentStr = typeof content === 'string' ? content : JSON.stringify(content);
+  return crypto.createHash('sha256').update(contentStr, 'utf-8').digest('hex').substring(0, 16);
+}
+
+// Response Formatファイルの初期化
+async function initResponseFormats() {
+  try {
+    await fs.access(RESPONSE_FORMATS_FILE);
+  } catch {
+    await fs.writeFile(RESPONSE_FORMATS_FILE, JSON.stringify({}, null, 2));
+  }
+}
+
+// Response Formatを読み込み
+async function readResponseFormats() {
+  try {
+    const data = await fs.readFile(RESPONSE_FORMATS_FILE, 'utf-8');
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
+}
+
+// Response Formatを保存
+async function writeResponseFormats(formats) {
+  await fs.writeFile(RESPONSE_FORMATS_FILE, JSON.stringify(formats, null, 2));
+}
+
+// Response Formatを登録（バージョン管理）
+async function registerResponseFormat(content) {
+  if (!content) {
+    return null;
+  }
+
+  const hash = generateResponseFormatHash(content);
+  const formats = await readResponseFormats();
+
+  if (formats[hash]) {
+    formats[hash].usageCount += 1;
+    formats[hash].lastUsedAt = new Date().toISOString();
+  } else {
+    formats[hash] = {
+      content,
+      hash,
+      createdAt: new Date().toISOString(),
+      lastUsedAt: new Date().toISOString(),
+      usageCount: 1
+    };
+  }
+
+  await writeResponseFormats(formats);
+  return hash;
+}
+
+await initResponseFormats();
+
+// ====================
+// ログ管理・アクセストークン管理
+// ====================
 
 // トークン使用量をログに記録
 async function logTokenUsage(model, usage, userId = null) {
@@ -1054,7 +1121,7 @@ app.get('/api/threads/:threadId', requireAuth, async (req, res) => {
 // 新規スレッド作成
 app.post('/api/threads', requireAuth, async (req, res) => {
   try {
-    const { title, systemPrompt, model } = req.body;
+    const { title, systemPrompt, model, responseFormat, reasoningEffort } = req.body;
     const threadId = generateId();
     const timestamp = new Date().toISOString();
     const userPrompt = (systemPrompt || DEFAULT_SYSTEM_PROMPT).trim();
@@ -1063,6 +1130,9 @@ app.post('/api/threads', requireAuth, async (req, res) => {
     if (!modelValidation.valid) {
       return res.status(400).json({ error: modelValidation.error });
     }
+
+    // Response Formatを登録
+    const responseFormatHash = responseFormat ? await registerResponseFormat(responseFormat) : null;
 
     const newThreadSummary = {
       id: threadId,
@@ -1080,6 +1150,8 @@ app.post('/api/threads', requireAuth, async (req, res) => {
       userId: req.user.user_id,
       systemPrompt: composeSystemPrompt(userPrompt, []),
       model: modelValidation.model,
+      responseFormatHash,
+      reasoningEffort: reasoningEffort || 'medium',
       messages: [],
       artifactIds: [],
       createdAt: timestamp,
@@ -1156,6 +1228,77 @@ app.put('/api/threads/:threadId/system-prompt', requireAuth, async (req, res) =>
       artifactInventory: artifacts
     });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Response Format取得API
+app.get('/api/response-formats/:hash', requireAuth, async (req, res) => {
+  try {
+    const { hash } = req.params;
+    const formats = await readResponseFormats();
+    const format = formats[hash];
+
+    if (!format) {
+      return res.status(404).json({ error: 'Response format not found' });
+    }
+
+    res.json(format);
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Response Format更新API
+app.put('/api/threads/:threadId/response-format', requireAuth, async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { responseFormat } = req.body;
+    const thread = await readThread(req.params.threadId);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+
+    // Response Formatを設定
+    if (responseFormat) {
+      const hash = await registerResponseFormat(responseFormat);
+      thread.responseFormatHash = hash;
+      thread.responseFormat = responseFormat;
+    } else {
+      // 空の場合は削除
+      thread.responseFormatHash = null;
+      thread.responseFormat = null;
+    }
+
+    await writeThread(threadId, thread);
+
+    res.json({
+      responseFormat: thread.responseFormat,
+      responseFormatHash: thread.responseFormatHash
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reasoning Effort更新API
+app.put('/api/threads/:threadId/reasoning-effort', requireAuth, async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { reasoningEffort } = req.body;
+    const thread = await readThread(req.params.threadId);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+
+    // Reasoning Effortを設定（デフォルトは medium）
+    thread.reasoningEffort = reasoningEffort || 'medium';
+    
+    await writeThread(threadId, thread);
+
+    res.json({
+      reasoningEffort: thread.reasoningEffort
+    });
+  } catch (error) {
+    console.log(error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1252,7 +1395,7 @@ app.get('/api/token-usage/stats', requireAuth, async (req, res) => {
 app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req, res) => {
   try {
     const { threadId } = req.params;
-    const { content, model } = req.body;
+    const { content, model, responseFormat, reasoningEffort } = req.body;
     
     const thread = await readThread(threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
@@ -1503,7 +1646,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
           input: [
             { role: 'developer', content: developerPrompt },
             ...conversationHistory
-          ],
+        ],
           tools: tools,
           tool_choice: "auto",
           parallel_tool_calls: true
@@ -1512,8 +1655,21 @@ If start_pattern matches multiple locations, the operation is applied to all mat
         // Reasoningモデルの場合のみreasoningパラメータを追加
         if (isReasoningModel(selectedModel)) {
           requestParams.reasoning = {
-            effort: "medium",
+            effort: reasoningEffort || "medium",
             summary: "auto",
+          };
+        }
+
+        // JSON Schema対応
+        if (responseFormat && responseFormat.schema) {
+          requestParams.text = {
+            format: {
+              name: responseFormat.name || "custom_response_schema",
+              type: "json_schema",
+              description: responseFormat.description || "Custom response schema",
+              strict: responseFormat.strict !== undefined ? responseFormat.strict : false,
+              schema: responseFormat.schema
+            }
           };
         }
 
@@ -2041,6 +2197,17 @@ If start_pattern matches multiple locations, the operation is applied to all mat
       // システムプロンプトをバージョン管理システムに登録
       const systemPromptHash = await registerSystemPrompt(developerPrompt);
 
+      // Response Formatをバージョン管理システムに登録
+      if (responseFormat) {
+        const responseFormatHash = await registerResponseFormat(responseFormat);
+        thread.responseFormatHash = responseFormatHash;
+      }
+
+      // Reasoning Effortを保存
+      if (reasoningEffort) {
+        thread.reasoningEffort = reasoningEffort;
+      }
+
       // Usage情報の拡張
       const rawUsage = finalResponse?.usage || {};
       const inputTokens = rawUsage.input_tokens || 0;
@@ -2102,7 +2269,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
       await writeThreads(threads);
     }
     
-    res.json({
+  res.json({
       userMessage,
       assistantMessage,
       thread: {
