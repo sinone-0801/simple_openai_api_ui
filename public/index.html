@@ -3308,12 +3308,16 @@
             if (responseFormatText) {
                 try {
                     const parsedSchema = JSON.parse(responseFormatText);
-                    responseFormat = {
-                        name: "custom_response_schema",
-                        description: "User-defined response format",
-                        strict: false,
-                        schema: parsedSchema
-                    };
+                    if (parsedSchema.schema) {
+                        responseFormat = parsedSchema;
+                    } else {
+                        responseFormat = {
+                            name: "custom_response_schema",
+                            description: "User-defined response format",
+                            strict: false,
+                            schema: parsedSchema
+                        };
+                    }
                 } catch (e) {
                     console.error('Invalid JSON Schema:', e);
                     alert('JSON Schemaの形式が正しくありません: ' + e.message);

@@ -10,9 +10,8 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import * as auth from './auth.js';
 import * as payment from './payment.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import * as configs from './utils/config.js';
+import * as helpers from './helpers.js';
 
 const app = express();
 
@@ -40,9 +39,8 @@ app.post('/api/payment/create-checkout', requireAuth, async (req, res) => {
     }
 
     // 成功・キャンセルのURL
-    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
-    const successUrl = `${baseUrl}/success.html`;
-    const cancelUrl = `${baseUrl}/cancel.html`;
+    const successUrl = `${configs.BASE_URL}/success.html`;
+    const cancelUrl = `${configs.BASE_URL}/cancel.html`;
 
     // Checkoutセッション作成
     const session = await payment.createCheckoutSession({
@@ -101,332 +99,39 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
 // 環境変数の確認
-if (!process.env.OPENAI_API_KEY) {
-  console.error('ERROR: OPENAI_API_KEY is not set in .env file');
-  console.error('Please set OPENAI_API_KEY before starting the server.');
-  process.exit(1);
-}
-
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  console.error('ERROR: JWT_SECRET is not set in environment variables');
-  console.error('Please set JWT_SECRET before starting the server.');
-  process.exit(1);
-}
-
-// 認証関係（JWT有効期限の設定）
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h';
-
-// UI表示設定
-const CREDIT_MAX_DISPLAY = parseInt(process.env.CREDIT_MAX_DISPLAY) || 100000;
+configs.validateRequiredEnvVars();
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 50 * 1024 * 1024, // 例: 50MB
-    files: 20
+    fileSize: configs.MAX_FILE_SIZE,
+    files: configs.MAX_FILES
   }
 });
 
-// デフォルトモデルの設定
-const DEFAULT_MODEL = process.env.ORCHESTRATOR_MODEL || 'gpt-5-codex';
-
-// トークンコストの設定（.envから読み込み）
-const TOKEN_COST_HIGH = parseInt(process.env.TOKEN_COST_HIGH) || 10;
-const TOKEN_COST_LOW = parseInt(process.env.TOKEN_COST_LOW) || 1;
-
-// 利用可能なモデルのリスト
-const AVAILABLE_MODELS = [
-  'gpt-5.1',
-  'gpt-5.1-codex',
-  'gpt-5',
-  'gpt-5-codex',
-  'gpt-5-chat-latest',
-  'gpt-4.1',
-  'gpt-4o',
-  'o1',
-  'o3',
-  'gpt-5.1-codex-mini',
-  'gpt-5-mini',
-  'gpt-5-nano',
-  'gpt-4.1-mini',
-  'gpt-4.1-nano',
-  'gpt-4o-mini',
-  'o1-mini',
-  'o3-mini',
-  'o4-mini',
-];
-
-const AVAILABLE_MODELS_HIGH_COST = [
-  'gpt-5.1',
-  'gpt-5.1-codex',
-  'gpt-5',
-  'gpt-5-codex',
-  'gpt-5-chat-latest',
-  'gpt-4.1',
-  'gpt-4o',
-  'o1',
-  'o3'
-];
-
-const AVAILABLE_MODELS_LOW_COST = [
-  'gpt-5.1-codex-mini',
-  'gpt-5-mini',
-  'gpt-5-nano',
-  'gpt-4.1-mini',
-  'gpt-4.1-nano',
-  'gpt-4o-mini',
-  'o1-mini',
-  'o3-mini',
-  'o4-mini',
-];
-
-const REASONING_MODELS = [
-  'gpt-5.1',
-  'gpt-5.1-codex',
-  'gpt-5.1-codex-mini',
-  'gpt-5',
-  'gpt-5-codex',
-  'o1',
-  'o3',
-  'gpt-5-mini',
-  'gpt-5-nano',
-  'o1-mini',
-  'o3-mini',
-  'o4-mini',
-];
-
-const NON_REASONING_MODELS = [
-  'gpt-5-chat-latest',
-  'gpt-4.1',
-  'gpt-4o',
-  'gpt-4.1-mini',
-  'gpt-4.1-nano',
-  'gpt-4o-mini'
-];
-
-const FREE_TIER_LIMITS = { highCost: 1_000_000, lowCost: 10_000_000 };
-const LIMIT_THRESHOLD_RATIO = 0.8;
-
-console.log(`Default model: ${DEFAULT_MODEL}`);
-console.log(`Available models: ${AVAILABLE_MODELS.join(', ')}`);
-console.log(`High cost models (free 1 million tokens / day): ${AVAILABLE_MODELS_HIGH_COST.join(', ')}`);
-console.log(`Low cost models (free 10 million tokens / day): ${AVAILABLE_MODELS_LOW_COST.join(', ')}`);
-
-// システムプロンプトのデフォルト値
-const DEFAULT_SYSTEM_PROMPT = 'You are a helpful assistant.';
-const AUTO_PROMPT_MARKER_START = '-----\n[auto] thread_artifact_inventory\n';
-const AUTO_PROMPT_MARKER_END = '-----';
+// 設定値のログ出力
+configs.logConfiguration();
 
 // OpenAIクライアントの初期化
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  timeout: 30 * 60 * 1000, // 30分 (1,800秒) = 1,800,000ms
-  maxRetries: 2
+  timeout: configs.OPENAI_API_TIMEOUT,
+  maxRetries: configs.OPENAI_MAX_RETRIES
 });
 
 // ディレクトリの初期化
-const DATA_DIR = path.join(__dirname, 'data');
-const ARTIFACTS_DIR = path.join(__dirname, 'artifacts');
-const THREADS_FILE = path.join(DATA_DIR, 'threads.json');
-const TOKEN_LOG_FILE = path.join(DATA_DIR, 'token_usage.csv');
-const SYSTEM_PROMPTS_FILE = path.join(DATA_DIR, 'system_prompts.json');
-const RESPONSE_FORMATS_FILE = path.join(DATA_DIR, 'response_formats.json');
-
-await fs.mkdir(DATA_DIR, { recursive: true });
-await fs.mkdir(ARTIFACTS_DIR, { recursive: true });
+await fs.mkdir(configs.DATA_DIR, { recursive: true });
+await fs.mkdir(configs.ARTIFACTS_DIR, { recursive: true });
 
 // データベースの初期化
 await auth.initDatabase();
 
-const INVALID_FILENAME_CHARS_REGEX = /[\\/:*?"<>|]/g;
-const DEFAULT_ARTIFACT_BASENAME = 'artifact';
-
 // CSVログファイルの初期化
-async function initTokenLog() {
-  try {
-    await fs.access(TOKEN_LOG_FILE);
-  } catch {
-    await fs.writeFile(TOKEN_LOG_FILE, 'timestamp,model,input_tokens,output_tokens,total_tokens,user_id\n');
-  }
-}
+await helpers.initTokenLog();
 
-await initTokenLog();
+await helpers.initSystemPrompts();
 
-// ====================
-// システムプロンプト管理機能
-// ====================
-
-// システムプロンプトのハッシュを生成
-function generatePromptHash(content) {
-  return crypto.createHash('sha256').update(content, 'utf-8').digest('hex').substring(0, 16);
-}
-
-// システムプロンプトファイルの初期化
-async function initSystemPrompts() {
-  try {
-    await fs.access(SYSTEM_PROMPTS_FILE);
-  } catch {
-    await fs.writeFile(SYSTEM_PROMPTS_FILE, JSON.stringify({}, null, 2));
-  }
-}
-
-// システムプロンプトを読み込み
-async function readSystemPrompts() {
-  try {
-    const data = await fs.readFile(SYSTEM_PROMPTS_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    return {};
-  }
-}
-
-// システムプロンプトを保存
-async function writeSystemPrompts(prompts) {
-  await fs.writeFile(SYSTEM_PROMPTS_FILE, JSON.stringify(prompts, null, 2));
-}
-
-// システムプロンプトを登録（バージョン管理）
-async function registerSystemPrompt(content) {
-  if (!content || typeof content !== 'string') {
-    return null;
-  }
-
-  const hash = generatePromptHash(content);
-  const prompts = await readSystemPrompts();
-
-  if (!prompts[hash]) {
-    prompts[hash] = {
-      hash,
-      content,
-      createdAt: new Date().toISOString(),
-      usageCount: 0
-    };
-    await writeSystemPrompts(prompts);
-  }
-
-  // 使用回数をインクリメント
-  prompts[hash].usageCount++;
-  await writeSystemPrompts(prompts);
-
-  return hash;
-}
-
-// システムプロンプトを取得
-async function getSystemPrompt(hash) {
-  const prompts = await readSystemPrompts();
-  return prompts[hash] || null;
-}
-
-await initSystemPrompts();
-
-// ====================
-// Response Format管理機能
-// ====================
-
-// Response Formatのハッシュを生成
-function generateResponseFormatHash(content) {
-  const contentStr = typeof content === 'string' ? content : JSON.stringify(content);
-  return crypto.createHash('sha256').update(contentStr, 'utf-8').digest('hex').substring(0, 16);
-}
-
-// Response Formatファイルの初期化
-async function initResponseFormats() {
-  try {
-    await fs.access(RESPONSE_FORMATS_FILE);
-  } catch {
-    await fs.writeFile(RESPONSE_FORMATS_FILE, JSON.stringify({}, null, 2));
-  }
-}
-
-// Response Formatを読み込み
-async function readResponseFormats() {
-  try {
-    const data = await fs.readFile(RESPONSE_FORMATS_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    return {};
-  }
-}
-
-// Response Formatを保存
-async function writeResponseFormats(formats) {
-  await fs.writeFile(RESPONSE_FORMATS_FILE, JSON.stringify(formats, null, 2));
-}
-
-// Response Formatを登録（バージョン管理）
-async function registerResponseFormat(content) {
-  if (!content) {
-    return null;
-  }
-
-  const hash = generateResponseFormatHash(content);
-  const formats = await readResponseFormats();
-
-  if (formats[hash]) {
-    formats[hash].usageCount += 1;
-    formats[hash].lastUsedAt = new Date().toISOString();
-  } else {
-    formats[hash] = {
-      content,
-      hash,
-      createdAt: new Date().toISOString(),
-      lastUsedAt: new Date().toISOString(),
-      usageCount: 1
-    };
-  }
-
-  await writeResponseFormats(formats);
-  return hash;
-}
-
-await initResponseFormats();
-
-// ====================
-// ログ管理・アクセストークン管理
-// ====================
-
-// トークン使用量をログに記録
-async function logTokenUsage(model, usage, userId = null) {
-  if (!usage) return;
-  const now = new Date();
-  const timestamp = now.toISOString();
-  const logEntry = `${timestamp},${model},${usage.input_tokens || 0},${usage.output_tokens || 0},${usage.total_tokens || 0},${userId || 'anonymous'}\n`;
-  await fs.appendFile(TOKEN_LOG_FILE, logEntry);
-
-  // ユーザーのクレジット使用量を記録
-  if (userId && usage.total_tokens) {
-    try {
-      // モデルに応じたクレジット消費量を計算
-      const isHighCostModel = AVAILABLE_MODELS_HIGH_COST.includes(model);
-      const tokenCostRate = isHighCostModel ? TOKEN_COST_HIGH : TOKEN_COST_LOW;
-      const creditsToConsume = usage.total_tokens * tokenCostRate;
-
-      console.log(`[Credit] User: ${userId}, Model: ${model} (${isHighCostModel ? 'High' : 'Low'} cost), Tokens: ${usage.total_tokens}, Rate: ${tokenCostRate}, Credits consumed: ${creditsToConsume}`);
-
-      await auth.recordCreditUsage(userId, creditsToConsume);
-    } catch (error) {
-      console.error('Failed to record credit usage:', error);
-    }
-  }
-}
-
-function createAccessToken(user) {
-  if (!user || !user.user_id) {
-    throw new Error('Invalid user payload for token generation');
-  }
-
-  return jwt.sign(
-    {
-      sub: user.user_id,
-      authority: user.authority,
-      remaining_credit: user.remaining_credit,
-      is_active: user.isActive
-    },
-    JWT_SECRET,
-    { expiresIn: JWT_EXPIRES_IN }
-  );
-}
+await helpers.initResponseFormats();
 
 // ====================
 // 認証ミドルウェア
@@ -451,7 +156,7 @@ async function requireAuth(req, res, next) {
     // JWTトークンを検証
     let decoded;
     try {
-      decoded = jwt.verify(token, JWT_SECRET);
+      decoded = jwt.verify(token, configs.JWT_SECRET);
     } catch (jwtError) {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
@@ -501,591 +206,9 @@ async function checkCredit(req, res, next) {
   next();
 }
 
-// ====================
-// 主要機能のAPIエンドポイント
-// ====================
-
-// CSVログを読み込んで解析
-async function readTokenLog() {
-  try {
-    const content = await fs.readFile(TOKEN_LOG_FILE, 'utf-8');
-    const lines = content.trim().split('\n');
-    if (lines.length <= 1) return [];
-    const data = lines.slice(1).map(line => {
-      const [timestamp, model, input_tokens, output_tokens, total_tokens, user_id] = line.split(',');
-      return {
-        timestamp: new Date(timestamp),
-        model,
-        input_tokens: parseInt(input_tokens) || 0,
-        output_tokens: parseInt(output_tokens) || 0,
-        total_tokens: parseInt(total_tokens) || 0,
-        user_id: user_id || 'anonymous'
-      };
-    });
-    return data;
-  } catch (error) {
-    console.error('Error reading token log:', error);
-    return [];
-  }
-}
-
-// ログの圧縮と削除を実行
-async function compressAndCleanLogs() {
-  try {
-    const logs = await readTokenLog();
-    if (logs.length === 0) return;
-    const now = new Date();
-    const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
-    const threeMonthsAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-    const toJSTDateString = (date) => {
-      const jstDate = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-      return jstDate.toISOString().split('T')[0];
-    };
-    const validLogs = logs.filter(log => log.timestamp >= threeMonthsAgo);
-    const recentLogs = validLogs.filter(log => log.timestamp >= threeDaysAgo);
-    const oldLogs = validLogs.filter(log => log.timestamp < threeDaysAgo);
-    const dailyAggregated = {};
-    oldLogs.forEach(log => {
-      const dateKey = toJSTDateString(log.timestamp);
-      const modelKey = `${dateKey}_${log.model}_${log.user_id}`;
-      if (!dailyAggregated[modelKey]) {
-        dailyAggregated[modelKey] = {
-          timestamp: new Date(dateKey + 'T00:00:00Z'),
-          model: log.model,
-          input_tokens: 0,
-          output_tokens: 0,
-          total_tokens: 0,
-          user_id: log.user_id
-        };
-      }
-      dailyAggregated[modelKey].input_tokens += log.input_tokens;
-      dailyAggregated[modelKey].output_tokens += log.output_tokens;
-      dailyAggregated[modelKey].total_tokens += log.total_tokens;
-    });
-    const compressedLogs = [...Object.values(dailyAggregated), ...recentLogs]
-      .sort((a, b) => a.timestamp - b.timestamp);
-    let csvContent = 'timestamp,model,input_tokens,output_tokens,total_tokens,user_id\n';
-    compressedLogs.forEach(log => {
-      csvContent += `${log.timestamp.toISOString()},${log.model},${log.input_tokens},${log.output_tokens},${log.total_tokens},${log.user_id}\n`;
-    });
-    await fs.writeFile(TOKEN_LOG_FILE, csvContent);
-    console.log('Token logs compressed and cleaned');
-  } catch (error) {
-    console.error('Error compressing logs:', error);
-  }
-}
-
-setInterval(compressAndCleanLogs, 60 * 60 * 1000);
-compressAndCleanLogs();
-
-// ユーティリティ関数
-async function getTokenUsageSummary(hours = 24, userId = null) {
-  const logs = await readTokenLog();
-  const now = new Date();
-  const boundary = new Date(now.getTime() - hours * 60 * 60 * 1000);
-
-  const summary = {
-    highCost: { usage: 0, limit: FREE_TIER_LIMITS.highCost },
-    lowCost: { usage: 0, limit: FREE_TIER_LIMITS.lowCost }
-  };
-
-  for (const log of logs) {
-    if (log.timestamp < boundary) continue;
-    
-    // ユーザーIDでフィルタリング（指定された場合）
-    if (userId && log.user_id !== userId) continue;
-    
-    if (AVAILABLE_MODELS_HIGH_COST.includes(log.model)) {
-      summary.highCost.usage += log.total_tokens;
-    } else if (AVAILABLE_MODELS_LOW_COST.includes(log.model)) {
-      summary.lowCost.usage += log.total_tokens;
-    }
-  }
-
-  summary.highCost.percentage = summary.highCost.limit
-    ? (summary.highCost.usage / summary.highCost.limit) * 100
-    : 0;
-  summary.lowCost.percentage = summary.lowCost.limit
-    ? (summary.lowCost.usage / summary.lowCost.limit) * 100
-    : 0;
-
-  return summary;
-}
-
-async function readThreads() {
-  try {
-    const data = await fs.readFile(THREADS_FILE, 'utf-8');
-    const parsed = JSON.parse(data);
-    parsed.threads = parsed.threads.map(summary => ({
-      ...summary,
-      artifactIds: Array.isArray(summary.artifactIds) ? summary.artifactIds : []
-    }));
-    return parsed;
-  } catch {
-    return { threads: [] };
-  }
-}
-
-async function writeThreads(data) {
-  await fs.writeFile(THREADS_FILE, JSON.stringify(data, null, 2));
-}
-
-async function readThread(threadId) {
-  const threadPath = path.join(DATA_DIR, `thread_${threadId}.json`);
-  try {
-    const data = await fs.readFile(threadPath, 'utf-8');
-    const thread = JSON.parse(data);
-    thread.artifactIds = Array.isArray(thread.artifactIds) ? thread.artifactIds : [];
-    return thread;
-  } catch {
-    return null;
-  }
-}
-
-async function writeThread(threadId, data) {
-  ensureThreadDefaults(data);
-  const threadFile = path.join(DATA_DIR, `thread_${threadId}.json`);
-  await fs.writeFile(threadFile, JSON.stringify(data, null, 2));
-}
-
-function generateId() {
-  return crypto.randomUUID();
-}
-
-function ensureThreadDefaults(thread) {
-  if (!thread) return thread;
-  if (!thread.systemPromptUser) {
-    thread.systemPromptUser = thread.systemPrompt || DEFAULT_SYSTEM_PROMPT;
-  }
-  if (!Array.isArray(thread.artifactIds)) {
-    thread.artifactIds = [];
-  }
-  return thread;
-}
-
-async function readArtifactMetadata(artifactId) {
-  const metadataPath = path.join(ARTIFACTS_DIR, artifactId, 'metadata.json');
-  const content = await fs.readFile(metadataPath, 'utf-8');
-  return JSON.parse(content);
-}
-
-async function collectThreadArtifactSummaries(threadId) {
-  const artifactDirs = await fs.readdir(ARTIFACTS_DIR);
-  const summaries = [];
-  for (const dir of artifactDirs) {
-    try {
-      const metadata = await readArtifactMetadata(dir);
-      if (threadId && metadata.threadId !== threadId) continue;
-      const latest = metadata.versions.at(-1) || {};
-      summaries.push({
-        id: metadata.id,
-        name: metadata.filename,
-        description: latest.metadata?.description || '',
-        updatedAt: metadata.updatedAt
-      });
-    } catch {
-      continue;
-    }
-  }
-  return summaries.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-}
-
-function sanitizeFilename(filename) {
-  if (typeof filename !== 'string') {
-    return DEFAULT_ARTIFACT_BASENAME;
-  }
-  const trimmed = filename.trim();
-  if (!trimmed) {
-    return DEFAULT_ARTIFACT_BASENAME;
-  }
-  const base = path.basename(trimmed);
-  const sanitized = base.replace(INVALID_FILENAME_CHARS_REGEX, '_');
-  return sanitized || DEFAULT_ARTIFACT_BASENAME;
-}
-
-function decodeMulterFilename(name) {
-  if (typeof name !== 'string') {
-    return DEFAULT_ARTIFACT_BASENAME;
-  }
-  return Buffer.from(name, 'latin1').toString('utf8');
-}
-
-function composeSystemPrompt(userPrompt = DEFAULT_SYSTEM_PROMPT, artifactSummaries = []) {
-  const sanitized = userPrompt.trim() || DEFAULT_SYSTEM_PROMPT;
-  const inventoryJson = JSON.stringify(
-    artifactSummaries.map(({ id, name, description }) => ({ id, name, description })),
-    null,
-    2
-  );
-  const autoBlock = [
-    AUTO_PROMPT_MARKER_START.trim(),
-    inventoryJson,
-    AUTO_PROMPT_MARKER_END.trim()
-  ].join('\n') + '\n';
-  return `${sanitized}\n\n${autoBlock}`;
-}
-
-function arraysEqual(a = [], b = []) {
-  return a.length === b.length && a.every((value, index) => value === b[index]);
-}
-
-async function updateThreadSummaryMetadata(thread) {
-  const threads = await readThreads();
-  let changed = false;
-  threads.threads = threads.threads.map(summary => {
-    if (summary.id !== thread.id) return summary;
-    changed = true;
-    return {
-      ...summary,
-      updatedAt: thread.updatedAt,
-      artifactIds: thread.artifactIds
-    };
-  });
-  if (!changed) return;
-  await writeThreads(threads);
-}
-
-async function refreshThreadDerivedState(thread, { persist = true } = {}) {
-  if (!thread) return { thread: null, artifacts: [] };
-  ensureThreadDefaults(thread);
-  const artifacts = await collectThreadArtifactSummaries(thread.id);
-  const artifactIds = artifacts.map(a => a.id);
-  const effectivePrompt = composeSystemPrompt(thread.systemPromptUser, artifacts);
-
-  let changed = false;
-  if (!arraysEqual(thread.artifactIds, artifactIds)) {
-    thread.artifactIds = artifactIds;
-    changed = true;
-  }
-  if (thread.systemPrompt !== effectivePrompt) {
-    thread.systemPrompt = effectivePrompt;
-    changed = true;
-  }
-
-  if (changed && persist) {
-    thread.updatedAt = new Date().toISOString();
-    await writeThread(thread.id, thread);
-    await updateThreadSummaryMetadata(thread);
-  }
-
-  return { thread, artifacts, changed };
-}
-
-async function updateThreadAfterArtifactChange(threadId) {
-  if (!threadId) return;
-  const thread = await readThread(threadId);
-  if (!thread) return;
-  await refreshThreadDerivedState(thread, { persist: true });
-}
-
-async function ensureArtifactDir(artifactId) {
-  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-  await fs.mkdir(artifactDir, { recursive: true });
-  return artifactDir;
-}
-
-function buildVersionedFilename(filename, version) {
-  const parsed = path.parse(filename);
-  const safeName = parsed.name || DEFAULT_ARTIFACT_BASENAME;
-  const safeExt = parsed.ext || '';
-  return `${safeName}_v${version}${safeExt}`;
-}
-
-async function writeArtifactFile(filePath, content) {
-  const data = Buffer.isBuffer(content) ? content : Buffer.from(content);
-  await fs.writeFile(filePath, data);
-}
-
-async function createArtifactRecord({ filename, content, metadata = {}, threadId = null }) {
-  const artifactId = generateId();
-  const version = 1;
-  const timestamp = new Date().toISOString();
-  const safeFilename = sanitizeFilename(filename);
-
-  const artifactDir = await ensureArtifactDir(artifactId);
-  const versionedFilename = buildVersionedFilename(safeFilename, version);
-  const filePath = path.join(artifactDir, versionedFilename);
-  await writeArtifactFile(filePath, content);
-
-  const artifactMetadata = {
-    id: artifactId,
-    filename: safeFilename,
-    threadId,
-    currentVersion: version,
-    versions: [{
-      version,
-      filename: versionedFilename,
-      createdAt: timestamp,
-      metadata
-    }],
-    createdAt: timestamp,
-    updatedAt: timestamp
-  };
-
-  const metadataPath = path.join(artifactDir, 'metadata.json');
-  await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
-  await updateThreadAfterArtifactChange(threadId);
-
-  return {
-    artifactId,
-    version,
-    filename: versionedFilename,
-    displayFilename: safeFilename,
-    threadId,
-    path: `/api/artifacts/${artifactId}/v${version}`
-  };
-}
-
-async function appendArtifactVersion({ artifactId, content, metadata = {} }) {
-  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-  const metadataPath = path.join(artifactDir, 'metadata.json');
-
-  const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-  const artifactMetadata = JSON.parse(metadataContent);
-
-  const newVersion = artifactMetadata.currentVersion + 1;
-  const timestamp = new Date().toISOString();
-  const versionedFilename = buildVersionedFilename(artifactMetadata.filename, newVersion);
-  const filePath = path.join(artifactDir, versionedFilename);
-
-  await writeArtifactFile(filePath, content);
-
-  artifactMetadata.currentVersion = newVersion;
-  artifactMetadata.versions.push({
-    version: newVersion,
-    filename: versionedFilename,
-    createdAt: timestamp,
-    metadata
-  });
-  artifactMetadata.updatedAt = timestamp;
-
-  await fs.writeFile(metadataPath, JSON.stringify(artifactMetadata, null, 2));
-  await updateThreadAfterArtifactChange(artifactMetadata.threadId);
-
-  return {
-    artifactId,
-    version: newVersion,
-    filename: versionedFilename,
-    displayFilename: artifactMetadata.filename,
-    threadId: artifactMetadata.threadId,
-    path: `/api/artifacts/${artifactId}/v${newVersion}`
-  };
-}
-
-// ==========================================
-// patch_artifact ツール用ヘルパー関数
-// ==========================================
-
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * パターン内の連続空白を \s+ に変換した正規表現を生成
- */
-function buildFlexiblePattern(pattern) {
-  const tokens = pattern.trim().split(/\s+/).map(escapeRegExp);
-  if (tokens.length === 0) {
-    throw new Error('Pattern must contain at least one non-whitespace character');
-  }
-  return new RegExp(tokens.join('\\s+'), 'g');
-}
-
-/**
- * マッチ範囲の先頭／末尾から余分な空白を取り除いたオフセットを返す
- */
-function trimWhitespaceAroundMatch(text, start, end) {
-  while (start < end && /\s/.test(text[start])) start += 1;
-  while (end > start && /\s/.test(text[end - 1])) end -= 1;
-  return { start, end };
-}
-
-/**
- * 柔軟な空白マッチを考慮して全マッチを返す（オフセットベース）
- */
-function findAllMatches(content, pattern) {
-  const matches = [];
-  const regex = buildFlexiblePattern(pattern);
-  let match;
-
-  while ((match = regex.exec(content)) !== null) {
-    const rawStart = match.index;
-    const rawEnd = regex.lastIndex;
-    const { start, end } = trimWhitespaceAroundMatch(content, rawStart, rawEnd);
-
-    if (start === end) {
-      continue; // 空白しかなかった場合はスキップ
-    }
-
-    matches.push({
-      startOffset: start,
-      endOffset: end,
-      text: content.slice(start, end)
-    });
-
-    // 無限ループ防止（ゼロ幅マッチ対策）
-    if (regex.lastIndex === match.index) {
-      regex.lastIndex += 1;
-    }
-  }
-
-  return matches;
-}
-
-/**
- * start/endパターンのマッチ同士をペアリング
- */
-function pairStartEnd(startMatches, endMatches, startPattern, endPattern) {
-  // start と end が同じ文字列なら同一マッチを利用
-  if (startPattern && endPattern && startPattern === endPattern) {
-    return startMatches.map(match => ({ startMatch: match, endMatch: match }));
-  }
-
-  const pairs = [];
-  const usedEnd = new Set();
-
-  for (const startMatch of startMatches) {
-    let candidate = null;
-    let candidateIndex = -1;
-
-    for (let i = 0; i < endMatches.length; i++) {
-      if (usedEnd.has(i)) continue;
-      const endMatch = endMatches[i];
-
-      if (endMatch.startOffset >= startMatch.endOffset) {
-        if (!candidate || endMatch.startOffset < candidate.startOffset) {
-          candidate = endMatch;
-          candidateIndex = i;
-        }
-      }
-    }
-
-    if (candidate) {
-      pairs.push({ startMatch, endMatch: candidate });
-      usedEnd.add(candidateIndex);
-    }
-  }
-
-  return pairs;
-}
-
-/**
- * パッチを適用（オフセットベース）
- */
-function applyPatches(content, edits) {
-  if (!Array.isArray(edits) || edits.length === 0) {
-    throw new Error('edits must be a non-empty array');
-  }
-
-  const appliedEdits = [];
-
-  for (const edit of edits) {
-    const { edit_type, start_pattern, end_pattern, new_content } = edit;
-
-    if (!edit_type || !start_pattern) {
-      throw new Error('Each edit must have edit_type and start_pattern');
-    }
-
-    const startMatches = findAllMatches(content, start_pattern);
-    if (startMatches.length === 0) {
-      throw new Error(`start_pattern not found: "${start_pattern.substring(0, 50)}..."`);
-    }
-
-    if (edit_type === 'replace' || edit_type === 'delete') {
-      if (!end_pattern) {
-        throw new Error(`edit_type "${edit_type}" requires end_pattern`);
-      }
-
-      const endMatches = findAllMatches(content, end_pattern);
-      if (endMatches.length === 0) {
-        throw new Error(`end_pattern not found: "${end_pattern.substring(0, 50)}..."`);
-      }
-
-      const pairs = pairStartEnd(startMatches, endMatches, start_pattern, end_pattern);
-      if (pairs.length === 0) {
-        throw new Error('No valid start-end pairs found');
-      }
-
-      for (const { startMatch, endMatch } of pairs) {
-        appliedEdits.push({
-          type: edit_type,
-          startOffset: startMatch.startOffset,
-          endOffset: endMatch.endOffset,
-          newContent: edit_type === 'replace' ? (new_content ?? '') : ''
-        });
-      }
-    } else if (edit_type === 'insert_before' || edit_type === 'insert_after') {
-      for (const match of startMatches) {
-        appliedEdits.push({
-          type: edit_type,
-          startOffset: match.startOffset,
-          endOffset: match.endOffset,
-          newContent: new_content ?? ''
-        });
-      }
-    } else {
-      throw new Error(`Unknown edit_type: ${edit_type}`);
-    }
-  }
-
-  // オフセットの大きい順に適用
-  appliedEdits.sort((a, b) => b.startOffset - a.startOffset);
-
-  let updatedContent = content;
-  for (const edit of appliedEdits) {
-    switch (edit.type) {
-      case 'replace': {
-        updatedContent =
-          updatedContent.slice(0, edit.startOffset) +
-          edit.newContent +
-          updatedContent.slice(edit.endOffset);
-        break;
-      }
-      case 'delete': {
-        updatedContent =
-          updatedContent.slice(0, edit.startOffset) +
-          updatedContent.slice(edit.endOffset);
-        break;
-      }
-      case 'insert_before': {
-        updatedContent =
-          updatedContent.slice(0, edit.startOffset) +
-          edit.newContent +
-          updatedContent.slice(edit.startOffset);
-        break;
-      }
-      case 'insert_after': {
-        updatedContent =
-          updatedContent.slice(0, edit.endOffset) +
-          edit.newContent +
-          updatedContent.slice(edit.endOffset);
-        break;
-      }
-    }
-  }
-
-  return updatedContent;
-}
-
-// モデルのバリデーション
-function validateModel(model) {
-  if (!model) {
-    return { valid: true, model: DEFAULT_MODEL };
-  }
-  
-  if (AVAILABLE_MODELS.includes(model)) {
-    return { valid: true, model };
-  }
-  
-  return { 
-    valid: false, 
-    error: `Invalid model: ${model}. Available models: ${AVAILABLE_MODELS.join(', ')}` 
-  };
-}
-
-function isReasoningModel(model) {
-  return REASONING_MODELS.includes(model);
-}
+// ログ圧縮の定期実行
+setInterval(helpers.compressAndCleanLogs, 60 * 60 * 1000);
+helpers.compressAndCleanLogs();
 
 // ====================
 // スレッド管理 API
@@ -1094,7 +217,7 @@ function isReasoningModel(model) {
 // スレッド一覧取得
 app.get('/api/threads', requireAuth, async (req, res) => {
   try {
-    const data = await readThreads();
+    const data = await helpers.readThreads();
     res.json({ threads: data.threads });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1105,10 +228,10 @@ app.get('/api/threads', requireAuth, async (req, res) => {
 app.get('/api/threads/:threadId', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.params;
-    const thread = await readThread(threadId);
+    const thread = await helpers.readThread(threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
 
-    const { thread: refreshedThread, artifacts } = await refreshThreadDerivedState(thread, { persist: true });
+    const { thread: refreshedThread, artifacts } = await helpers.refreshThreadDerivedState(thread, { persist: true });
     res.json({
       ...refreshedThread,
       artifactInventory: artifacts
@@ -1122,17 +245,17 @@ app.get('/api/threads/:threadId', requireAuth, async (req, res) => {
 app.post('/api/threads', requireAuth, async (req, res) => {
   try {
     const { title, systemPrompt, model, responseFormat, reasoningEffort } = req.body;
-    const threadId = generateId();
+    const threadId = helpers.generateId();
     const timestamp = new Date().toISOString();
-    const userPrompt = (systemPrompt || DEFAULT_SYSTEM_PROMPT).trim();
+    const userPrompt = (systemPrompt || configs.DEFAULT_SYSTEM_PROMPT).trim();
 
-    const modelValidation = validateModel(model);
+    const modelValidation = helpers.validateModel(model);
     if (!modelValidation.valid) {
       return res.status(400).json({ error: modelValidation.error });
     }
 
     // Response Formatを登録
-    const responseFormatHash = responseFormat ? await registerResponseFormat(responseFormat) : null;
+    const responseFormatHash = responseFormat ? await helpers.registerResponseFormat(responseFormat) : null;
 
     const newThreadSummary = {
       id: threadId,
@@ -1148,7 +271,7 @@ app.post('/api/threads', requireAuth, async (req, res) => {
       title: newThreadSummary.title,
       systemPromptUser: userPrompt,
       userId: req.user.user_id,
-      systemPrompt: composeSystemPrompt(userPrompt, []),
+      systemPrompt: helpers.composeSystemPrompt(userPrompt, []),
       model: modelValidation.model,
       responseFormatHash,
       reasoningEffort: reasoningEffort || 'medium',
@@ -1158,10 +281,10 @@ app.post('/api/threads', requireAuth, async (req, res) => {
       updatedAt: timestamp
     };
 
-    const threads = await readThreads();
+    const threads = await helpers.readThreads();
     threads.threads.push(newThreadSummary);
-    await writeThreads(threads);
-    await writeThread(threadId, threadData);
+    await helpers.writeThreads(threads);
+    await helpers.writeThread(threadId, threadData);
 
     res.status(201).json({
       ...threadData,
@@ -1178,12 +301,12 @@ app.delete('/api/threads/:threadId', requireAuth, async (req, res) => {
     const { threadId } = req.params;
     
     // スレッド一覧から削除
-    const threads = await readThreads();
+    const threads = await helpers.readThreads();
     threads.threads = threads.threads.filter(t => t.id !== threadId);
-    await writeThreads(threads);
+    await helpers.writeThreads(threads);
     
     // スレッドファイルを削除
-    const threadFile = path.join(DATA_DIR, `thread_${threadId}.json`);
+    const threadFile = path.join(configs.DATA_DIR, `thread_${threadId}.json`);
     await fs.unlink(threadFile).catch(() => {});
     
     res.json({ message: 'Thread deleted successfully' });
@@ -1199,9 +322,9 @@ app.delete('/api/threads/:threadId', requireAuth, async (req, res) => {
 // システムプロンプト取得
 app.get('/api/threads/:threadId/system-prompt', requireAuth, async (req, res) => {
   try {
-    const thread = await readThread(req.params.threadId);
+    const thread = await helpers.readThread(req.params.threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
-    const { thread: refreshedThread, artifacts } = await refreshThreadDerivedState(thread, { persist: true });
+    const { thread: refreshedThread, artifacts } = await helpers.refreshThreadDerivedState(thread, { persist: true });
     res.json({
       systemPromptUser: refreshedThread.systemPromptUser,
       systemPrompt: refreshedThread.systemPrompt,
@@ -1216,11 +339,11 @@ app.get('/api/threads/:threadId/system-prompt', requireAuth, async (req, res) =>
 app.put('/api/threads/:threadId/system-prompt', requireAuth, async (req, res) => {
   try {
     const { systemPrompt } = req.body;
-    const thread = await readThread(req.params.threadId);
+    const thread = await helpers.readThread(req.params.threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
 
-    thread.systemPromptUser = (systemPrompt || DEFAULT_SYSTEM_PROMPT).trim();
-    const { thread: refreshedThread, artifacts } = await refreshThreadDerivedState(thread, { persist: true });
+    thread.systemPromptUser = (systemPrompt || configs.DEFAULT_SYSTEM_PROMPT).trim();
+    const { thread: refreshedThread, artifacts } = await helpers.refreshThreadDerivedState(thread, { persist: true });
 
     res.json({
       systemPromptUser: refreshedThread.systemPromptUser,
@@ -1236,7 +359,7 @@ app.put('/api/threads/:threadId/system-prompt', requireAuth, async (req, res) =>
 app.get('/api/response-formats/:hash', requireAuth, async (req, res) => {
   try {
     const { hash } = req.params;
-    const formats = await readResponseFormats();
+    const formats = await helpers.readResponseFormats();
     const format = formats[hash];
 
     if (!format) {
@@ -1255,12 +378,12 @@ app.put('/api/threads/:threadId/response-format', requireAuth, async (req, res) 
   try {
     const { threadId } = req.params;
     const { responseFormat } = req.body;
-    const thread = await readThread(req.params.threadId);
+    const thread = await helpers.readThread(req.params.threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
 
     // Response Formatを設定
     if (responseFormat) {
-      const hash = await registerResponseFormat(responseFormat);
+      const hash = await helpers.registerResponseFormat(responseFormat);
       thread.responseFormatHash = hash;
       thread.responseFormat = responseFormat;
     } else {
@@ -1269,7 +392,7 @@ app.put('/api/threads/:threadId/response-format', requireAuth, async (req, res) 
       thread.responseFormat = null;
     }
 
-    await writeThread(threadId, thread);
+    await helpers.writeThread(threadId, thread);
 
     res.json({
       responseFormat: thread.responseFormat,
@@ -1286,13 +409,13 @@ app.put('/api/threads/:threadId/reasoning-effort', requireAuth, async (req, res)
   try {
     const { threadId } = req.params;
     const { reasoningEffort } = req.body;
-    const thread = await readThread(req.params.threadId);
+    const thread = await helpers.readThread(req.params.threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
 
     // Reasoning Effortを設定（デフォルトは medium）
     thread.reasoningEffort = reasoningEffort || 'medium';
     
-    await writeThread(threadId, thread);
+    await helpers.writeThread(threadId, thread);
 
     res.json({
       reasoningEffort: thread.reasoningEffort
@@ -1310,10 +433,10 @@ app.put('/api/threads/:threadId/reasoning-effort', requireAuth, async (req, res)
 // 利用可能なモデル一覧取得
 app.get('/api/models', requireAuth, (req, res) => {
   res.json({
-    defaultModel: DEFAULT_MODEL,
-    availableModels: AVAILABLE_MODELS,
-    highCostModels: AVAILABLE_MODELS_HIGH_COST,
-    lowCostModels: AVAILABLE_MODELS_LOW_COST
+    defaultModel: configs.DEFAULT_MODEL,
+    availableModels: configs.AVAILABLE_MODELS,
+    highCostModels: configs.AVAILABLE_MODELS_HIGH_COST,
+    lowCostModels: configs.AVAILABLE_MODELS_LOW_COST
   });
 });
 
@@ -1321,13 +444,13 @@ app.get('/api/models', requireAuth, (req, res) => {
 app.get('/api/threads/:threadId/model', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.params;
-    const thread = await readThread(threadId);
+    const thread = await helpers.readThread(threadId);
     
     if (!thread) {
       return res.status(404).json({ error: 'Thread not found' });
     }
     
-    res.json({ model: thread.model || DEFAULT_MODEL });
+    res.json({ model: thread.model || configs.DEFAULT_MODEL });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1340,19 +463,19 @@ app.put('/api/threads/:threadId/model', requireAuth, async (req, res) => {
     const { model } = req.body;
     
     // モデルのバリデーション
-    const modelValidation = validateModel(model);
+    const modelValidation = helpers.validateModel(model);
     if (!modelValidation.valid) {
       return res.status(400).json({ error: modelValidation.error });
     }
     
-    const thread = await readThread(threadId);
+    const thread = await helpers.readThread(threadId);
     if (!thread) {
       return res.status(404).json({ error: 'Thread not found' });
     }
     
     thread.model = modelValidation.model;
     thread.updatedAt = new Date().toISOString();
-    await writeThread(threadId, thread);
+    await helpers.writeThread(threadId, thread);
     
     res.json({ model: thread.model });
   } catch (error) {
@@ -1366,7 +489,7 @@ app.put('/api/threads/:threadId/model', requireAuth, async (req, res) => {
 
 // トークン使用量の統計を取得
 app.get('/api/token-usage/stats', requireAuth, async (req, res) => {
-  const summary = await getTokenUsageSummary();
+  const summary = await helpers.getTokenUsageSummary();
   try {
     res.json({
       last24Hours: {
@@ -1397,28 +520,28 @@ app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req
     const { threadId } = req.params;
     const { content, model, responseFormat, reasoningEffort } = req.body;
     
-    const thread = await readThread(threadId);
+    const thread = await helpers.readThread(threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
 
-    const { thread: hydratedThread } = await refreshThreadDerivedState(thread, { persist: false });
+    const { thread: hydratedThread } = await helpers.refreshThreadDerivedState(thread, { persist: false });
     const developerPrompt = hydratedThread.systemPrompt;
 
     let conversationHistory = hydratedThread.messages.map(m => ({ role: m.role, content: m.content }));
 
     // モデルの優先順位: リクエスト > スレッド > デフォルト
-    let selectedModel = model || thread.model || DEFAULT_MODEL;
+    let selectedModel = model || thread.model || configs.DEFAULT_MODEL;
 
     // モデルのバリデーション
-    const modelValidation = validateModel(selectedModel);
+    const modelValidation = helpers.validateModel(selectedModel);
     if (!modelValidation.valid) {
       return res.status(400).json({ error: modelValidation.error });
     }
     selectedModel = modelValidation.model;
 
-    const usageSummary = await getTokenUsageSummary();
-    const modelTier = AVAILABLE_MODELS_HIGH_COST.includes(selectedModel) ? 'highCost' : 'lowCost';
+    const usageSummary = await helpers.getTokenUsageSummary();
+    const modelTier = configs.AVAILABLE_MODELS_HIGH_COST.includes(selectedModel) ? 'highCost' : 'lowCost';
     const tierUsage = usageSummary[modelTier];
-    if (tierUsage.usage >= tierUsage.limit * LIMIT_THRESHOLD_RATIO) {
+    if (tierUsage.usage >= tierUsage.limit * configs.LIMIT_THRESHOLD_RATIO) {
       return res.status(429).json({
         error: 'TOKEN_LIMIT_APPROACHING',
         message: '24時間の無料利用枠がまもなく上限に達するため、しばらく待ってから再度お試しください。',
@@ -1431,7 +554,7 @@ app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req
     
     // ユーザーメッセージを追加
     const userMessage = {
-      id: generateId(),
+      id: helpers.generateId(),
       role: 'user',
       content,
       timestamp: new Date().toISOString()
@@ -1440,7 +563,7 @@ app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req
     
     // 一旦ユーザーメッセージを保存
     thread.updatedAt = new Date().toISOString();
-    await writeThread(threadId, thread);
+    await helpers.writeThread(threadId, thread);
     
     let assistantMessage;
     try {
@@ -1646,14 +769,14 @@ If start_pattern matches multiple locations, the operation is applied to all mat
           input: [
             { role: 'developer', content: developerPrompt },
             ...conversationHistory
-        ],
+          ],
           tools: tools,
           tool_choice: "auto",
           parallel_tool_calls: true
         };
 
         // Reasoningモデルの場合のみreasoningパラメータを追加
-        if (isReasoningModel(selectedModel)) {
+        if (helpers.isReasoningModel(selectedModel)) {
           requestParams.reasoning = {
             effort: reasoningEffort || "medium",
             summary: "auto",
@@ -1672,6 +795,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
             }
           };
         }
+        console.log(responseFormat);
 
         const response = await client.responses.create(requestParams);
         console.log(requestParams);
@@ -1686,7 +810,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
           console.log(`出力トークン: ${response.usage.output_tokens}`);
           console.log(`合計トークン: ${response.usage.total_tokens}`);
           console.log('---------------------\n');
-          await logTokenUsage(selectedModel, response.usage, req.user.user_id);
+          await helpers.logTokenUsage(selectedModel, response.usage, req.user.user_id);
         }
 
         // レスポンス構造の取得
@@ -1740,7 +864,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
               if (item.name === 'create_artifact') {
                 try {
                   console.log('  📝 Creating artifact...');
-                  const record = await createArtifactRecord({
+                  const record = await helpers.createArtifactRecord({
                     filename: toolInput.filename,
                     content: toolInput.content,
                     metadata: { description: toolInput.description || '' },
@@ -1784,7 +908,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
               if (item.name === 'replace_artifact') {
                 try {
                   console.log('  ✏️ Editing artifact...');
-                  const record = await appendArtifactVersion({
+                  const record = await helpers.appendArtifactVersion({
                     artifactId: toolInput.artifact_id,
                     content: toolInput.content,
                     metadata: { description: toolInput.description || '' }
@@ -1843,7 +967,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                     throw new Error('line_count must be a positive integer');
                   }
 
-                  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+                  const artifactDir = path.join(configs.ARTIFACTS_DIR, artifactId);
                   const metadataPath = path.join(artifactDir, 'metadata.json');
                   const metadataContent = await fs.readFile(metadataPath, 'utf-8');
                   const artifactMetadata = JSON.parse(metadataContent);
@@ -1945,7 +1069,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                   const edits = toolInput.edits;
                   
                   // 現在のアーティファクトを読み込む
-                  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+                  const artifactDir = path.join(configs.ARTIFACTS_DIR, artifactId);
                   const metadataPath = path.join(artifactDir, 'metadata.json');
                   const metadataContent = await fs.readFile(metadataPath, 'utf-8');
                   const artifactMetadata = JSON.parse(metadataContent);
@@ -1959,10 +1083,10 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                   const originalContent = await fs.readFile(filePath, 'utf-8');
                   
                   // パッチを適用
-                  const patchedContent = applyPatches(originalContent, edits);
+                  const patchedContent = helpers.applyPatches(originalContent, edits);
                   
                   // 新しいバージョンとして保存
-                  const record = await appendArtifactVersion({
+                  const record = await helpers.appendArtifactVersion({
                     artifactId,
                     content: patchedContent,
                     metadata: { 
@@ -2023,7 +1147,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                     throw new Error('search_pattern must be a non-empty string');
                   }
 
-                  const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+                  const artifactDir = path.join(configs.ARTIFACTS_DIR, artifactId);
                   const metadataPath = path.join(artifactDir, 'metadata.json');
                   const metadataContent = await fs.readFile(metadataPath, 'utf-8');
                   const artifactMetadata = JSON.parse(metadataContent);
@@ -2044,7 +1168,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
                   const content = await fs.readFile(filePath, 'utf-8');
                   
                   // findAllMatchesを再利用（既存のpatch_artifact用関数）
-                  const matches = findAllMatches(content, searchPattern);
+                  const matches = helpers.findAllMatches(content, searchPattern);
                   
                   // 行単位の情報を構築
                   const lines = content.split('\n');
@@ -2136,7 +1260,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
 
         // create/edit artifactツール呼び出しがあった場合、スレッドの派生状態を更新
         if (toolCallsInThisIteration.some(call => ['create_artifact', 'replace_artifact'].includes(call.name))) {
-          await refreshThreadDerivedState(thread, { persist: true });
+          await helpers.refreshThreadDerivedState(thread, { persist: true });
         }
 
         // ツール呼び出しがあった場合、結果を会話履歴に追加して再度呼び出し
@@ -2195,11 +1319,11 @@ If start_pattern matches multiple locations, the operation is applied to all mat
       }
 
       // システムプロンプトをバージョン管理システムに登録
-      const systemPromptHash = await registerSystemPrompt(developerPrompt);
+      const systemPromptHash = await helpers.registerSystemPrompt(developerPrompt);
 
       // Response Formatをバージョン管理システムに登録
       if (responseFormat) {
-        const responseFormatHash = await registerResponseFormat(responseFormat);
+        const responseFormatHash = await helpers.registerResponseFormat(responseFormat);
         thread.responseFormatHash = responseFormatHash;
       }
 
@@ -2213,13 +1337,13 @@ If start_pattern matches multiple locations, the operation is applied to all mat
       const inputTokens = rawUsage.input_tokens || 0;
       const outputTokens = rawUsage.output_tokens || 0;
       const totalTokens = rawUsage.total_tokens || (inputTokens + outputTokens);
-      const isHighCostModel = AVAILABLE_MODELS_HIGH_COST.includes(selectedModel);
-      const tokenCostRate = isHighCostModel ? TOKEN_COST_HIGH : TOKEN_COST_LOW;
+      const isHighCostModel = configs.AVAILABLE_MODELS_HIGH_COST.includes(selectedModel);
+      const tokenCostRate = isHighCostModel ? configs.TOKEN_COST_HIGH : configs.TOKEN_COST_LOW;
       const creditsUsed = totalTokens * tokenCostRate;
 
       // アシスタントの応答を追加
       assistantMessage = {
-        id: generateId(),
+        id: helpers.generateId(),
         role: 'assistant',
         content: responseText || 'No response',
         model: selectedModel,
@@ -2247,7 +1371,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
       console.error(`${selectedModel} API Error:`, apiError);
       // エラーの場合でもエラーメッセージを返す
       assistantMessage = {
-        id: generateId(),
+        id: helpers.generateId(),
         role: 'assistant',
         content: `エラーが発生しました: ${apiError.message}`,
         model: selectedModel,
@@ -2259,14 +1383,14 @@ If start_pattern matches multiple locations, the operation is applied to all mat
     
     // スレッドを更新
     thread.updatedAt = new Date().toISOString();
-    await writeThread(threadId, thread);
+    await helpers.writeThread(threadId, thread);
     
     // スレッド一覧の更新時刻も更新
-    const threads = await readThreads();
+    const threads = await helpers.readThreads();
     const threadIndex = threads.threads.findIndex(t => t.id === threadId);
     if (threadIndex !== -1) {
       threads.threads[threadIndex].updatedAt = thread.updatedAt;
-      await writeThreads(threads);
+      await helpers.writeThreads(threads);
     }
     
   res.json({
@@ -2291,7 +1415,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
 app.get('/api/threads/:threadId/messages', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.params;
-    const thread = await readThread(threadId);
+    const thread = await helpers.readThread(threadId);
     
     if (!thread) {
       return res.status(404).json({ error: 'Thread not found' });
@@ -2311,7 +1435,7 @@ app.get('/api/threads/:threadId/messages', requireAuth, async (req, res) => {
 app.get('/api/threads/:threadId/messages/:messageId/usage', requireAuth, async (req, res) => {
   try {
     const { threadId, messageId } = req.params;
-    const thread = await readThread(threadId);
+    const thread = await helpers.readThread(threadId);
     
     if (!thread) {
       return res.status(404).json({ error: 'Thread not found' });
@@ -2343,7 +1467,7 @@ app.get('/api/threads/:threadId/messages/:messageId/usage', requireAuth, async (
 app.get('/api/system-prompts/:hash', requireAuth, async (req, res) => {
   try {
     const { hash } = req.params;
-    const prompt = await getSystemPrompt(hash);
+    const prompt = await helpers.getSystemPrompt(hash);
     
     if (!prompt) {
       return res.status(404).json({ error: 'System prompt not found' });
@@ -2363,7 +1487,7 @@ app.get('/api/system-prompts/:hash', requireAuth, async (req, res) => {
 app.post('/api/artifacts', requireAuth, async (req, res) => {
   try {
     const { filename, content, metadata, threadId } = req.body;
-    const result = await createArtifactRecord({
+    const result = await helpers.createArtifactRecord({
       filename,
       content,
       metadata: metadata || {},
@@ -2379,7 +1503,7 @@ app.post('/api/artifacts', requireAuth, async (req, res) => {
 app.get('/api/artifacts/:artifactId', requireAuth, async (req, res) => {
   try {
     const { artifactId } = req.params;
-    const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+    const artifactDir = path.join(configs.ARTIFACTS_DIR, artifactId);
     const metadataPath = path.join(artifactDir, 'metadata.json');
     
     const metadataContent = await fs.readFile(metadataPath, 'utf-8');
@@ -2406,7 +1530,7 @@ app.get('/api/artifacts/:artifactId', requireAuth, async (req, res) => {
 app.get('/api/artifacts/:artifactId/v:version', requireAuth, async (req, res) => {
   try {
     const { artifactId, version } = req.params;
-    const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
+    const artifactDir = path.join(configs.ARTIFACTS_DIR, artifactId);
     const metadataPath = path.join(artifactDir, 'metadata.json');
     
     const metadataContent = await fs.readFile(metadataPath, 'utf-8');
@@ -2442,7 +1566,7 @@ app.put('/api/artifacts/:artifactId', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'content is required' });
     }
 
-    const result = await appendArtifactVersion({
+    const result = await helpers.appendArtifactVersion({
       artifactId: req.params.artifactId,
       content,
       metadata: metadata || {}
@@ -2459,12 +1583,12 @@ app.put('/api/artifacts/:artifactId', requireAuth, async (req, res) => {
 app.delete('/api/artifacts/:artifactId', requireAuth, async (req, res) => {
   try {
     const { artifactId } = req.params;
-    const artifactDir = path.join(ARTIFACTS_DIR, artifactId);
-    const metadata = await readArtifactMetadata(req.params.artifactId).catch(() => null);
+    const artifactDir = path.join(configs.ARTIFACTS_DIR, artifactId);
+    const metadata = await helpers.readArtifactMetadata(req.params.artifactId).catch(() => null);
 
     // ディレクトリを削除
     await fs.rm(artifactDir, { recursive: true, force: true });
-    await updateThreadAfterArtifactChange(metadata?.threadId);
+    await helpers.updateThreadAfterArtifactChange(metadata?.threadId);
 
     res.json({ message: 'Artifact deleted successfully' });
   } catch (error) {
@@ -2476,7 +1600,7 @@ app.delete('/api/artifacts/:artifactId', requireAuth, async (req, res) => {
 app.get('/api/artifacts', requireAuth, async (req, res) => {
   try {
     const { threadId } = req.query;
-    const artifactDirs = await fs.readdir(ARTIFACTS_DIR);
+    const artifactDirs = await fs.readdir(configs.ARTIFACTS_DIR);
     const artifacts = [];
     
     // threadIdがクエリにないなら即座に空配列を返す
@@ -2485,7 +1609,7 @@ app.get('/api/artifacts', requireAuth, async (req, res) => {
     }
 
     for (const dir of artifactDirs) {
-      const metadataPath = path.join(ARTIFACTS_DIR, dir, 'metadata.json');
+      const metadataPath = path.join(configs.ARTIFACTS_DIR, dir, 'metadata.json');
       try {
         const metadataContent = await fs.readFile(metadataPath, 'utf-8');
         const metadata = JSON.parse(metadataContent);
@@ -2528,11 +1652,11 @@ app.post('/api/artifacts/upload', requireAuth, upload.array('files'), async (req
     const results = [];
     for (const file of req.files) {
       try {
-        const decodedName = decodeMulterFilename(file.originalname);
-        const safeFilename = sanitizeFilename(decodedName);
+        const decodedName = helpers.decodeMulterFilename(file.originalname);
+        const safeFilename = helpers.sanitizeFilename(decodedName);
         const fileMetadata = metadataPayload[decodedName] ?? metadataPayload[file.originalname] ?? {};
         // const fileMetadata = metadataPayload[file.originalname] || {};
-        const record = await createArtifactRecord({
+        const record = await helpers.createArtifactRecord({
           filename: safeFilename,
           // filename: file.originalname,
           content: file.buffer,
@@ -2545,7 +1669,7 @@ app.post('/api/artifacts/upload', requireAuth, upload.array('files'), async (req
         });
       } catch (fileError) {
         results.push({
-          originalName: decodeMulterFilename(file.originalname),
+          originalName: helpers.decodeMulterFilename(file.originalname),
           error: fileError.message
         });
       }
@@ -2567,7 +1691,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     res.json({ 
       user: req.user,
-      creditMaxDisplay: CREDIT_MAX_DISPLAY
+      creditMaxDisplay: configs.CREDIT_MAX_DISPLAY
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2594,7 +1718,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     // JWTトークンを生成
-    const token = createAccessToken(user);
+    const token = helpers.createAccessToken(user);
 
     res.json({ 
       success: true,
@@ -2765,10 +1889,8 @@ app.post('/api/admin/users/:userId/credit/reset', requireAuth, requireAdmin, asy
 // サーバー起動
 // ====================
 
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`GPT-5-Codex Backend API running on port ${PORT}`);
-  console.log(`Data directory: ${DATA_DIR}`);
-  console.log(`Artifacts directory: ${ARTIFACTS_DIR}`);
+app.listen(configs.PORT, () => {
+  console.log(`GPT-5-Codex Backend API running on port ${configs.PORT}`);
+  console.log(`Data directory: ${configs.DATA_DIR}`);
+  console.log(`Artifacts directory: ${configs.ARTIFACTS_DIR}`);
 });
