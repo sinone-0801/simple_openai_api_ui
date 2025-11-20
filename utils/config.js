@@ -30,6 +30,11 @@ export function validateRequiredEnvVars() {
 }
 
 // ====================
+// DEBUGモードの設定
+// ====================
+export const DEBUG = process.env.DEBUG || true;
+
+// ====================
 // JWT関連の設定
 // ====================
 
@@ -325,6 +330,22 @@ export const PORT = process.env.PORT || 3000;
  * @type {string}
  */
 export const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+
+// ====================
+// Bot 関連の設定
+// ====================
+
+export const BOT_DEFAULT_CREDIT = process.env.BOT_DEFAULT_CREDIT || 0;
+
+export const DISCORD_CONFIG = {
+  CLIENT_ID: process.env.DISCORD_CLIENT_ID,
+  CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET,
+  CALLBACK_URL: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth/discord/callback`,
+  OAUTH_URL: 'https://discord.com/api/oauth2/authorize',
+  TOKEN_URL: 'https://discord.com/api/oauth2/token',
+  USER_URL: 'https://discord.com/api/users/@me',
+  GUILD_URL: 'https://discord.com/api/users/@me/guilds'
+};
 
 // ====================
 // 設定値のログ出力

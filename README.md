@@ -43,3 +43,5 @@ npm start
     1. レスポンシブ対応
     2. システムプロンプト編集と同様に、応答スキーマの設定をUIから可能に
     3. MCPサーバーの追加
+
+    manage-pending-users.js の UX を user-manager.js 方式に変更

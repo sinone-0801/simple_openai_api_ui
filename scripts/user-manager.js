@@ -1,6 +1,7 @@
 // user-manager.js
 // 対話形式のユーザー管理CLIツール
 
+import 'dotenv/config';
 import * as auth from '../auth.js';
 import fs from 'fs/promises';
 import readline from 'readline';
@@ -23,6 +24,7 @@ function question(prompt) {
 
 // メニュー表示
 function displayMenu() {
+  const botUserId = process.env.BOT_USER_ID;
   console.log('\n' + '='.repeat(60));
   console.log('User Management CLI');
   console.log('='.repeat(60));
@@ -39,6 +41,12 @@ function displayMenu() {
   console.log(' 10. アカウント復活');
   console.log(' 11. CSV出力（全ユーザー情報）');
   console.log(' 12. CSVインポート（ユーザー情報上書き）');
+  console.log(' 13. 初期セットアップ（最初の管理者を作成）');
+  console.log(
+    ` 14. BOTアカウント発行（${
+      botUserId ? `推奨: ${botUserId}` : '.env の BOT_USER_ID 未設定'
+    }）`
+  );
   console.log('  0. 終了');
   console.log('='.repeat(60));
 }
@@ -465,6 +473,23 @@ async function deleteUser() {
       remainingCredit: 0
     }).catch(() => {});
 
+    if (user.authority === auth.Authority.ADMIN) {
+      const allUsers = await auth.getAllUsers();
+      const adminCount = allUsers.filter(
+        (u) => u.authority === auth.Authority.ADMIN
+      ).length;
+
+      if (adminCount <= 1) {
+        console.log('\n❌ このユーザーは唯一のAdminのため削除できません。');
+        return;
+      }
+
+      console.log('\nAdminアカウントを一旦User権限に降格してから削除します...');
+      await auth.updateUser(user.user_id, { authority: auth.Authority.USER });
+      user.authority = auth.Authority.USER;
+      console.log('✓ 権限をUserに変更しました。');
+    }
+
     await auth.deleteAccount(adminId, userId.trim());
 
     console.log('\n✓ ユーザーを削除しました。');
@@ -758,6 +783,97 @@ async function importFromCSV() {
   }
 }
 
+// 初期セットアップ（最初の管理者だけを作成）
+async function runInitialSetup() {
+  console.log('\n' + '='.repeat(60));
+  console.log('Initial Setup – create the very first admin user');
+  console.log('='.repeat(60));
+
+  const users = await auth.getAllUsers();
+  if (users.length > 0) {
+    console.log('\n❌ 既にユーザーが存在するため、このメニューは初期状態でのみ実行できます。');
+    console.log('ユーザーを全削除したい場合は data/users.db を手動で削除してから実行してください。');
+    return;
+  }
+
+  const userIdInput = await question('\nAdmin User ID (default: admin): ');
+  const adminUserId = userIdInput.trim() || 'admin';
+
+  const passwordInput = await question('Admin Password (default: admin123): ');
+  const adminPassword = passwordInput.trim() || 'admin123';
+
+  const creditInput = await question('Initial credit (default: 10000): ');
+  const remainingCredit = parseInt(creditInput.trim(), 10) || 10000;
+
+  try {
+    const admin = await auth.createUser({
+      userId: adminUserId,
+      password: adminPassword,
+      authority: auth.Authority.ADMIN,
+      remainingCredit
+    });
+
+    console.log('\n✓ Admin user created successfully!');
+    console.log('-'.repeat(60));
+    console.log(`User ID:          ${admin.userId}`);
+    console.log(`Password:         ${adminPassword}`);
+    console.log(`Authority:        ${admin.authority}`);
+    console.log(`Remaining Credit: ${admin.remainingCredit.toLocaleString()}`);
+    console.log('-'.repeat(60));
+    console.log('\nAuthorization header example:');
+    console.log(`Bearer ${adminUserId}:${adminPassword}`);
+    console.log('\n⚠️  IMPORTANT: Change the password after first login.\n');
+  } catch (error) {
+    if (error.message.includes('already exists')) {
+      console.log('\n❌ Admin user already exists. If this is unexpected, delete data/users.db and rerun the setup.');
+    } else {
+      console.log(`\n❌ エラー: ${error.message}`);
+    }
+  }
+}
+
+// BOTアカウント（管理者・パスワードなし）発行
+async function createBotAccount() {
+  console.log('\n' + '-'.repeat(60));
+  console.log('BOTアカウント発行（Admin / passwordless）');
+  console.log('-'.repeat(60));
+
+  const botUserId = process.env.BOT_USER_ID;
+  const botDefaultCredit = process.env.BOT_DEFAULT_CREDIT;
+  if (!botUserId) {
+    console.log('❌ BOT_USER_ID が .env に設定されていません。');
+    return;
+  }
+
+  const existing = await auth.getUser(botUserId);
+  if (existing) {
+    console.log(`ℹ️ BOTユーザー ${botUserId} は既に存在します。`);
+    console.log(`   現在の権限: ${existing.authority}`);
+    return;
+  }
+
+  try {
+    const botUser = await auth.createUser({
+      userId: botUserId,
+      authority: auth.Authority.ADMIN,
+      remainingCredit: botDefaultCredit ? parseInt(botDefaultCredit) : 10000000
+    });
+
+    console.log('\n✓ BOTアカウントを作成しました！');
+    console.log('-'.repeat(60));
+    console.log('User ID:          ', botUser.userId);
+    console.log('Authority:        ', botUser.authority);
+    console.log('Password:         ', 'なし（内部利用専用）');
+    console.log('Remaining Credit: ', botUser.remainingCredit.toLocaleString());
+    console.log('-'.repeat(60));
+    console.log('\nBOTクライアントは以下IDを利用してください:');
+    console.log(`BOT_USER_ID = ${botUserId}`);
+    console.log('このアカウントはBearerトークンでのパスワード入力を必要としません。');
+  } catch (error) {
+    console.log(`\n❌ エラー: ${error.message}`);
+  }
+}
+
 // CSV用のフィールドエスケープ
 function escapeCsvField(field) {
   if (field === null || field === undefined) return '';
@@ -918,6 +1034,12 @@ async function main() {
           break;
         case '12':
           await importFromCSV();
+          break;
+        case '13':
+          await runInitialSetup();
+          break;
+        case '14':
+          await createBotAccount();
           break;
         case '0':
           console.log('\n終了します。');

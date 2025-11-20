@@ -20,6 +20,7 @@ export const Authority = {
   VIP: 'Vip',
   USER: 'User',
   STOPPED: 'Stopped',
+  PENDING: 'Pending', // 承認待ち
   BANNED: 'Banned'
 };
 
@@ -77,7 +78,7 @@ export async function createUser({
   groupId = null, 
   threadId = null, 
   authority = Authority.USER,
-  remainingCredit = 10000 // デフォルト10,000クレジット（計量モデルで1/token消費、重いモデルで10/token消費くらい？）
+  remainingCredit = 0 // デフォルト 0 クレジット（計量モデルで1/token消費、重いモデルで10/token消費くらい？）
 }) {
   if (!userId) {
     throw new Error('User ID is required');
@@ -162,12 +163,12 @@ export async function authenticateWithPassword(userId, password) {
 // ユーザー認証（UserID + GroupID）
 export async function authenticateWithGroup(userId, groupId) {
   // ★ セキュリティ対策: UserIDとGroupIDが有効な文字列であることを確認
-  if (!isValidString(userId)) {
+  if (!isValidString(String(userId))) {
     console.warn('Authentication failed: Invalid userId');
     return null;
   }
 
-  if (!isValidString(groupId)) {
+  if (!isValidString(String(groupId))) {
     console.warn('Authentication failed: Invalid groupId (empty or null)');
     return null;
   }

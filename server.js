@@ -11,9 +11,18 @@ import jwt from 'jsonwebtoken';
 import * as auth from './auth.js';
 import * as payment from './payment.js';
 import * as configs from './utils/config.js';
+import { getStateManager } from './utils/oauth-state-validation.js';
 import * as helpers from './helpers.js';
 
 const app = express();
+
+// ====================
+// JWT無効化機能: サーバー起動時刻を記録
+// ====================
+// サーバー起動時刻（Unix timestamp in seconds）
+const SERVER_STARTUP_TIME = Math.floor(Date.now() / 1000);
+console.log(`[JWT] Server startup time: ${new Date(SERVER_STARTUP_TIME * 1000).toISOString()}`);
+console.log(`[JWT] Tokens issued before this time will be invalidated`);
 
 // ====================
 // 支払い・クレジット購入 API
@@ -101,6 +110,18 @@ app.use(express.static('public'));
 // 環境変数の確認
 configs.validateRequiredEnvVars();
 
+// データベースベースのマネージャーを初期化
+const stateManager = getStateManager('./data/auth.db');
+
+// 定期的にクリーンアップ（1時間ごと）
+setInterval(() => {
+  stateManager.cleanupExpiredStates();
+}, 60 * 60 * 1000);
+
+// 起動時に1回クリーンアップ
+stateManager.cleanupExpiredStates();
+
+// upload 制限の設定
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -159,6 +180,15 @@ async function requireAuth(req, res, next) {
       decoded = jwt.verify(token, configs.JWT_SECRET);
     } catch (jwtError) {
       return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    // サーバー起動時刻より前に発行されたトークンを拒否
+    if (decoded.iat && decoded.iat < SERVER_STARTUP_TIME) {
+      console.log(`[JWT] Token rejected: issued at ${new Date(decoded.iat * 1000).toISOString()} (before server startup)`);
+      return res.status(401).json({ 
+        error: 'Token invalidated due to server restart',
+        message: 'Please login again'
+      });
     }
 
     // デコードされたトークンからユーザー情報を取得
@@ -1701,16 +1731,63 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 // ログイン（認証テスト）
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { userId, password, groupId } = req.body;
+    const { userId, password, groupId, botUserId, guildId, guildToken } = req.body;
     
     let user = null;
-    
-    if (groupId) {
+    let authType = null;
+
+    // Bot認証（Discord Bot専用）
+    if (botUserId && guildId && guildToken) {
+      authType = 'bot';
+      
+      // 環境変数から期待されるBOT_USER_IDを取得
+      const expectedBotUserId = process.env.BOT_USER_ID || 'discord-bot';
+
+      // 1. BOT_USER_IDの厳密一致チェック
+      if (botUserId !== expectedBotUserId) {
+        console.warn(`[Auth] Invalid bot user ID attempted: ${botUserId}`);
+        return res.status(401).json({ error: 'Invalid bot credentials' });
+      }
+
+      // 2. guild-manager.jsの関数をインポートして使用
+      const guildManager = await import('./discord-bot/guild-manager.js');
+      
+      // 3. guildTokenの検証（HMAC-SHA256）
+      if (!guildManager.verifyGuildAuthToken(guildId, guildToken)) {
+        console.warn(`[Auth] Invalid guild token for guild: ${guildId}`);
+        return res.status(401).json({ error: 'Invalid guild credentials' });
+      }
+
+      // 4. guildIdがguilds.jsonに存在し、有効化されているか確認
+      if (!guildManager.isGuildEnabled(guildId)) {
+        console.warn(`[Auth] Guild not enabled: ${guildId}`);
+        return res.status(403).json({ error: 'Guild not enabled' });
+      }
+
+      // 5. Botユーザーがデータベースに存在するか確認
+      user = await auth.getUser(botUserId);
+      
+      if (!user) {
+        console.error(`[Auth] Bot user ${botUserId} not found in database`);
+        return res.status(401).json({ error: 'Bot user not configured' });
+      }
+      
+      console.log(`[Auth] Bot authenticated for guild: ${guildId}`);
+    }
+    // グループID認証
+    else if (userId && groupId) {
+      authType = 'group';
       user = await auth.authenticateWithGroup(userId, groupId);
-    } else if (password) {
+    }
+    // パスワード認証
+    else if (userId && password) {
+      authType = 'password';
       user = await auth.authenticateWithPassword(userId, password);
-    } else {
-      return res.status(400).json({ error: 'Password or groupId required' });
+    }
+    else {
+      return res.status(400).json({ 
+        error: 'Invalid authentication parameters. Provide one of: (userId + password), (userId + groupId), or (botUserId + guildId + guildToken)' 
+      });
     }
 
     if (!user) {
@@ -1720,15 +1797,27 @@ app.post('/api/auth/login', async (req, res) => {
     // JWTトークンを生成
     const token = helpers.createAccessToken(user);
 
-    res.json({ 
+    // Bot認証の場合は24時間の有効期限を明示
+    const response = { 
       success: true,
       user,
       token
-    });
+    };
+    
+    if (authType === 'bot') {
+      response.expiresIn = 86400; // 24時間（秒）
+      response.authType = 'bot';
+      response.guildId = guildId;
+    } else {
+      response.authType = authType;
+    }
+
+    res.json(response);
   } catch (error) {
     if (error.message.includes('stopped') || error.message.includes('banned')) {
       return res.status(403).json({ error: error.message });
     }
+    console.error('[Auth] Login error:', error);
     res.status(401).json({ error: 'Authentication failed' });
   }
 });
@@ -1754,6 +1843,546 @@ app.post('/api/auth/change-password', requireAuth, async (req, res) => {
 });
 
 // ====================
+// Discord用 API
+// ====================
+
+// OAuth2フロー開始エンドポイント
+app.get('/auth/discord/login', (req, res) => {
+  try {
+    const guildId = req.query.guildId;
+    const returnUrl = req.query.returnUrl || '/';
+    
+    // stateを生成して保存（10分間有効）
+    const state = stateManager.generateState(
+      null, // この時点ではuserIdは不明
+      { 
+        guildId,
+        returnUrl,
+        timestamp: Date.now()
+      },
+      10 // 10分間有効
+    );
+    
+    const params = new URLSearchParams({
+      client_id: configs.DISCORD_CONFIG.CLIENT_ID,
+      redirect_uri: configs.DISCORD_CONFIG.CALLBACK_URL,
+      response_type: 'code',
+      scope: 'identify email guilds bot openid', // scope の 種類はここを参照 https://discord.com/developers/docs/topics/oauth2
+      state: state
+    });
+
+    // オプション: 特定のギルドへの参加を促す
+    if (guildId) {
+      params.append('guild_id', guildId);
+    }
+
+    console.log(`[OAuth] Login initiated with state: ${state}`);
+    res.redirect(`${configs.DISCORD_CONFIG.OAUTH_URL}?${params.toString()}`);
+    
+  } catch (error) {
+    console.error('[OAuth] Login error:', error);
+    res.status(500).send('ログインの開始に失敗しました');
+  }
+});
+
+// OAuth2コールバックエンドポイント（State検証付き）
+app.get('/auth/discord/callback', async (req, res) => {
+  try {
+    const { code, state, guild_id, error, error_description } = req.query;
+    // エラーチェック
+    if (error) {
+      console.error('[OAuth] Authorization error:', error, error_description);
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>認証エラー</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              height: 100vh;
+              margin: 0;
+              background: #f44336;
+            }
+            .container {
+              background: white;
+              padding: 2rem;
+              border-radius: 10px;
+              text-align: center;
+            }
+            h1 { color: #f44336; }
+            a {
+              display: inline-block;
+              margin-top: 1rem;
+              padding: 0.5rem 1rem;
+              background: #5865F2;
+              color: white;
+              text-decoration: none;
+              border-radius: 5px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>❌ 認証エラー</h1>
+            <p>${error_description || 'ユーザーが認証をキャンセルしました'}</p>
+            <a href="/auth/discord/login">再試行</a>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+
+    if (!code) {
+      return res.status(400).send('認証コードが見つかりません');
+    }
+
+    // ===== 重要: State検証 =====
+    console.log(`[OAuth] Validating state: ${state}`);
+    const stateData = stateManager.validateState(state);
+    
+    if (!stateData) {
+      console.error('[OAuth] State validation failed:', state);
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>認証エラー</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              height: 100vh;
+              margin: 0;
+              background: #f44336;
+            }
+            .container {
+              background: white;
+              padding: 2rem;
+              border-radius: 10px;
+              text-align: center;
+            }
+            h1 { color: #f44336; }
+            p { margin: 1rem 0; }
+            a {
+              display: inline-block;
+              margin-top: 1rem;
+              padding: 0.5rem 1rem;
+              background: #5865F2;
+              color: white;
+              text-decoration: none;
+              border-radius: 5px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>🔒 セキュリティエラー</h1>
+            <p>無効または期限切れの認証リクエストです。</p>
+            <p>もう一度最初からやり直してください。</p>
+            <a href="/auth/discord/login">ログインページへ</a>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+
+    console.log('[OAuth] State validated successfully:', stateData);
+
+    // メタデータから情報を取得
+    const savedGuildId = stateData.metadata.guildId || guild_id;
+    const returnUrl = stateData.metadata.returnUrl || '/';
+
+    // 1. 認証コードをアクセストークンに交換
+    console.log('[OAuth] Exchanging code for access token');
+    const tokenResponse = await fetch(configs.DISCORD_CONFIG.TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        client_id: configs.DISCORD_CONFIG.CLIENT_ID,
+        client_secret: configs.DISCORD_CONFIG.CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: configs.DISCORD_CONFIG.CALLBACK_URL
+      })
+    });
+
+    if (!tokenResponse.ok) {
+      const errorData = await tokenResponse.json().catch(() => ({}));
+      console.error('[OAuth] Token exchange failed:', errorData);
+      throw new Error('トークンの取得に失敗しました');
+    }
+
+    const tokenData = await tokenResponse.json();
+    const { access_token, refresh_token, expires_in } = tokenData;
+
+    // 2. アクセストークンを使ってユーザー情報を取得
+    console.log('[OAuth] Fetching user information');
+    const userResponse = await fetch(configs.DISCORD_CONFIG.USER_URL, {
+      headers: {
+        Authorization: `Bearer ${access_token}`
+      }
+    });
+
+    if (!userResponse.ok) {
+      throw new Error('ユーザー情報の取得に失敗しました');
+    }
+
+    const discordUser = await userResponse.json();
+    const userId = discordUser.id;
+    const username = discordUser.username;
+    const discriminator = discordUser.discriminator;
+    const avatar = discordUser.avatar;
+
+    console.log(`[OAuth] User authenticated: ${username}#${discriminator} (${userId})`);
+
+    // 3. ユーザーが所属するギルド情報を取得
+    console.log('[OAuth] Fetching user guilds');
+    const guildsResponse = await fetch(configs.DISCORD_CONFIG.GUILD_URL, {
+      headers: {
+        Authorization: `Bearer ${access_token}`
+      }
+    });
+
+    let userGuilds = [];
+    if (guildsResponse.ok) {
+      userGuilds = await guildsResponse.json();
+      console.log(`[OAuth] User is in ${userGuilds.length} guilds`);
+    }
+
+    // 4. 特定のギルドへの所属確認
+    if (savedGuildId) {
+      const isMember = userGuilds.some(guild => guild.id === savedGuildId);
+      if (!isMember) {
+        console.error(`[OAuth] User is not a member of guild ${savedGuildId}`);
+        return res.status(403).send(`
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>アクセス拒否</title>
+            <style>
+              body {
+                font-family: Arial, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+                background: #f44336;
+              }
+              .container {
+                background: white;
+                padding: 2rem;
+                border-radius: 10px;
+                text-align: center;
+              }
+              h1 { color: #f44336; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>🚫 アクセス拒否</h1>
+              <p>指定されたDiscordサーバーのメンバーである必要があります。</p>
+            </div>
+          </body>
+          </html>
+        `);
+      }
+    }
+
+    // 5. ユーザーをシステムに登録または取得
+    let user = await auth.getUser(userId);
+    
+    if (!user && savedGuildId) {
+      // 新規ユーザーの場合、自動登録
+      console.log(`[OAuth] Creating new user: ${userId}`);
+      try {
+        const result = await auth.createUser({
+          userId: userId,
+          password: null,
+          groupId: savedGuildId,
+          threadId: null,
+          authority: auth.Authority.PENDING,
+          remainingCredit: configs.BOT_DEFAULT_CREDIT
+        });
+        user = result.userId;
+      } catch (error) {
+        console.error('[OAuth] User creation error:', error);
+        // ユーザーが既に存在する可能性がある
+        user = await auth.getUser(userId);
+      }
+    }
+
+    if (!user) {
+      console.error('[OAuth] User not found and could not be created');
+      return res.status(404).send('ユーザーが見つかりません');
+    }
+
+    // 6. JWTトークンを生成
+    const jwtToken = helpers.createAccessToken(user);
+
+    // 7. OAuth2トークンをデータベースに保存（オプション）
+    // ここで必要に応じてaccess_tokenとrefresh_tokenを保存
+    /*
+    await saveDiscordTokens(userId, {
+      accessToken: access_token,
+      refreshToken: refresh_token,
+      expiresAt: new Date(Date.now() + expires_in * 1000)
+    });
+    */
+
+    console.log(`[OAuth] Authentication successful for user ${userId}`);
+
+    // 8. フロントエンドにリダイレクト
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>認証成功</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+          }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          }
+          .container {
+            background: white;
+            padding: 3rem 2rem;
+            border-radius: 15px;
+            box-shadow: 0 15px 50px rgba(0,0,0,0.3);
+            text-align: center;
+            max-width: 400px;
+            animation: slideUp 0.5s ease-out;
+          }
+          @keyframes slideUp {
+            from {
+              opacity: 0;
+              transform: translateY(20px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          }
+          .success-icon {
+            color: #43b581;
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            animation: checkmark 0.5s ease-in-out;
+          }
+          @keyframes checkmark {
+            0% { transform: scale(0); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+          }
+          h1 {
+            color: #5865F2;
+            margin-bottom: 0.5rem;
+            font-size: 1.8rem;
+          }
+          .user-info {
+            background: #f5f5f5;
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1.5rem 0;
+          }
+          .user-info p {
+            color: #333;
+            margin: 0.5rem 0;
+            font-size: 0.9rem;
+          }
+          .user-info strong {
+            color: #5865F2;
+          }
+          #message {
+            color: #666;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+          }
+          .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(88, 101, 242, 0.3);
+            border-top-color: #5865F2;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 0.5rem;
+          }
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="success-icon">✓</div>
+          <h1>認証成功！</h1>
+          <div class="user-info">
+            <p><strong>ユーザー:</strong> ${username}#${discriminator}</p>
+            <p><strong>権限:</strong> ${user.authority}</p>
+          </div>
+          <p id="message">リダイレクト中<span class="spinner"></span></p>
+        </div>
+        <script>
+          // JWTトークンをlocalStorageに保存
+          localStorage.setItem('auth_token', '${jwtToken}');
+          localStorage.setItem('discord_user', JSON.stringify({
+            id: '${userId}',
+            username: '${username}',
+            discriminator: '${discriminator}',
+            avatar: '${avatar}',
+            authority: '${user.authority}'
+          }));
+          
+          console.log('[OAuth] Token saved to localStorage');
+          
+          // // メインページにリダイレクト
+          // setTimeout(() => {
+          //   window.location.href = '${returnUrl}';
+          // }, 2000);
+        </script>
+      </body>
+      </html>
+    `);
+
+  } catch (error) {
+    console.error('[OAuth] Callback error:', error);
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>認証エラー</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: #f44336;
+          }
+          .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            text-align: center;
+          }
+          h1 { color: #f44336; }
+          a {
+            display: inline-block;
+            margin-top: 1rem;
+            padding: 0.5rem 1rem;
+            background: #5865F2;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>❌ 認証エラー</h1>
+          <p>${error.message}</p>
+          <a href="/auth/discord/login">再試行</a>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+});
+
+// ==================================================
+// リフレッシュトークンエンドポイント
+// ==================================================
+app.post('/auth/discord/refresh', requireAuth, async (req, res) => {
+  try {
+    const { refresh_token } = req.body;
+
+    if (!refresh_token) {
+      return res.status(400).json({ error: 'Refresh token required' });
+    }
+
+    const tokenResponse = await fetch(configs.DISCORD_CONFIG.TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        client_id: configs.DISCORD_CONFIG.CLIENT_ID,
+        client_secret: configs.DISCORD_CONFIG.CLIENT_SECRET,
+        grant_type: 'refresh_token',
+        refresh_token: refresh_token
+      })
+    });
+
+    if (!tokenResponse.ok) {
+      throw new Error('トークンの更新に失敗しました');
+    }
+
+    const tokenData = await tokenResponse.json();
+    
+    res.json({
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_in: tokenData.expires_in
+    });
+
+  } catch (error) {
+    console.error('[OAuth] Token refresh error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Discord連携解除エンドポイント
+app.post('/auth/discord/revoke', requireAuth, async (req, res) => {
+  try {
+    const { access_token } = req.body;
+
+    if (!access_token) {
+      return res.status(400).json({ error: 'Access token required' });
+    }
+
+    await fetch('https://discord.com/api/oauth2/token/revoke', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        client_id: configs.DISCORD_CONFIG.CLIENT_ID,
+        client_secret: configs.DISCORD_CONFIG.CLIENT_SECRET,
+        token: access_token
+      })
+    });
+
+    res.json({ success: true, message: 'Discord連携を解除しました' });
+
+  } catch (error) {
+    console.error('[OAuth] Token revoke error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+console.log('[OAuth] Discord OAuth2 endpoints initialized');
+
+// ====================
 // Admin専用 API
 // ====================
 
@@ -1761,7 +2390,6 @@ app.post('/api/auth/change-password', requireAuth, async (req, res) => {
 app.post('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
   try {
     const { userId, password, groupId, threadId, authority, remainingCredit } = req.body;
-    
     const user = await auth.createUser({
       userId,
       password,
