@@ -1,11 +1,12 @@
 // discord-bot.js
-import { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, MessageFlags, ChannelType, PermissionFlagsBits } from 'discord.js';
+import { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, MessageFlags, ChannelType, PermissionFlagsBits, ActionRowBuilder, StringSelectMenuBuilder, ComponentType } from 'discord.js';
 import fetch from 'node-fetch';
 import 'dotenv/config';
 import { generateGuildAuthToken, isGuildEnabled, loadGuildConfig, saveGuildRequest } from './guild-manager.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +24,7 @@ const CONFIG = {
   MAX_MESSAGE_LENGTH: 2000,
   DEBUG: process.env.DEBUG || 'true',
   TEMP_CHANNELS_FILE: path.join(DISCORD_DATA_DIR, 'temp-channels.json'),
+  ONE_SHOT_FILE: path.join(DISCORD_DATA_DIR, 'one-shot-conversations.json'),
   AUTO_REPLY_INTERVAL: 5 * 60 * 1000, // 5分
   AUTO_REPLY_MIN_IDLE_TIME: 10 * 60 * 1000, // 10分
   AUTO_REPLY_MIN_TIME_BEFORE_DELETE: 30 * 60 * 1000 // 30分
@@ -45,6 +47,114 @@ const tokenCache = new Map();
 
 // 一時チャンネル管理
 let tempChannels = {};
+
+// 単発生成モード管理
+// { messageId: { userId, guildId, model, systemPrompt, createdAt, parentMessageId } }
+let oneShotConversations = {};
+
+// 利用可能なモデル一覧（APIから取得）
+let availableModels = [];
+const TEMP_CHANNEL_SELECTION_TTL = 10 * 60 * 1000; // 10 minutes
+const pendingChannelSelections = new Map();
+const TEMP_CHANNEL_SELECT_CUSTOM_ID = 'temp-channel-select';
+
+function truncateString(str = '', maxLength = 100) {
+  if (!str) return '';
+  return str.length > maxLength ? `${str.slice(0, maxLength - 1)}…` : str;
+}
+
+function buildTempChannelSelectRow(channels, requestId, placeholder = 'チャンネルを選択してください') {
+  if (!channels.length) return null;
+  const visibleChannels = channels.slice(0, 25); // Discordの選択肢は最大25件
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(`${TEMP_CHANNEL_SELECT_CUSTOM_ID}:${requestId}`)
+    .setPlaceholder(placeholder)
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+      visibleChannels.map(channel => {
+        const typeLabel = channel.type === 'voice' ? 'ボイス' : 'テキスト';
+        const categoryLabel = channel.categoryName || 'カテゴリなし';
+        return {
+          label: truncateString(channel.name || '不明なチャンネル', 100),
+          description: truncateString(`${categoryLabel} / ${typeLabel}`, 100),
+          value: channel.channelId
+        };
+      })
+    );
+
+  return new ActionRowBuilder().addComponents(selectMenu);
+}
+
+/**
+ * APIから利用可能なモデル一覧を取得
+ */
+async function fetchAvailableModels() {
+  try {
+    // まず、どれかのguildIdでBot用のJWTトークンを取得する必要あり
+    // 起動時にはguildがない場合があるので、エラーハンドリングが必要
+    
+    // 公開エンドポイントがない場合は、デフォルトのモデル一覧を使用
+    const defaultModels = [
+      { name: 'GPT-5.1', value: 'gpt-5.1' },
+      { name: 'GPT-5-mini', value: 'gpt-5-mini' },
+      { name: 'GPT-5.1-codex', value: 'gpt-5.1-codex' },
+      { name: 'o1', value: 'o1' },
+      { name: 'o4-mini', value: 'o4-mini' }
+    ];
+    
+    // 登録されているguildから1つ取得してトークンを使う
+    const guildsConfig = loadGuildConfig();
+    const registeredGuilds = Object.keys(guildsConfig);
+    
+    if (registeredGuilds.length === 0) {
+      console.log('[Models] No guilds registered, using default model list');
+      return defaultModels;
+    }
+    
+    // 最初の登録guildを使用
+    const firstGuildId = registeredGuilds[0];
+    
+    try {
+      const token = await getBotJWTToken(firstGuildId);
+      const response = await fetch(`${CONFIG.API_BASE_URL}/api/models`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (!response.ok) {
+        console.log('[Models] Failed to fetch models from API, using default list');
+        return defaultModels;
+      }
+      
+      const data = await response.json();
+      
+      // availableModels配列から選択肢を生成
+      if (data.availableModels && Array.isArray(data.availableModels)) {
+        const modelChoices = data.availableModels.map(model => ({
+          name: model,
+          value: model
+        }));
+        
+        console.log(`[Models] Loaded ${modelChoices.length} models from API`);
+        return modelChoices;
+      }
+      
+      return defaultModels;
+    } catch (error) {
+      console.error('[Models] Error fetching models:', error.message);
+      return defaultModels;
+    }
+  } catch (error) {
+    console.error('[Models] Error in fetchAvailableModels:', error);
+    return [
+      { name: 'GPT-5.1', value: 'gpt-5.1' },
+      { name: 'GPT-5-mini', value: 'gpt-5-mini' },
+      { name: 'GPT-5.1-codex', value: 'gpt-5.1-codex' },
+      { name: 'o1', value: 'o1' },
+      { name: 'o4-mini', value: 'o4-mini' }
+    ];
+  }
+}
 
 /**
  * 一時チャンネルデータを読み込む
@@ -77,6 +187,62 @@ async function saveTempChannels() {
   } catch (error) {
     console.error('[TempChannel] Error saving temp channels:', error);
   }
+}
+
+/**
+ * 単発生成モード会話データを読み込む
+ */
+async function loadOneShotConversations() {
+  try {
+    const data = await fs.readFile(CONFIG.ONE_SHOT_FILE, 'utf-8');
+    oneShotConversations = JSON.parse(data);
+    console.log(`[OneShot] Loaded ${Object.keys(oneShotConversations).length} conversations`);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      console.log('[OneShot] No existing one-shot conversations file, starting fresh');
+      oneShotConversations = {};
+    } else {
+      console.error('[OneShot] Error loading one-shot conversations:', error);
+      oneShotConversations = {};
+    }
+  }
+}
+
+/**
+ * 単発生成モード会話データを保存する
+ */
+async function saveOneShotConversations() {
+  try {
+    await fs.writeFile(CONFIG.ONE_SHOT_FILE, JSON.stringify(oneShotConversations, null, 2), 'utf-8');
+    if (CONFIG.DEBUG) {
+      console.log(`[OneShot] Saved ${Object.keys(oneShotConversations).length} conversations`);
+    }
+  } catch (error) {
+    console.error('[OneShot] Error saving one-shot conversations:', error);
+  }
+}
+
+/**
+ * 3日以上前の単発生成モード会話を削除
+ */
+async function cleanupOldOneShotConversations() {
+  const now = Date.now();
+  const threeDaysAgo = now - (3 * 24 * 60 * 60 * 1000);
+  let cleaned = 0;
+
+  for (const [messageId, data] of Object.entries(oneShotConversations)) {
+    if (data.createdAt < threeDaysAgo) {
+      delete oneShotConversations[messageId];
+      cleaned++;
+    }
+  }
+
+  if (cleaned > 0) {
+    await saveOneShotConversations();
+    console.log(`[OneShot] Cleaned up ${cleaned} old conversation(s) (older than 3 days)`);
+  }
+
+  return cleaned;
 }
 
 /**
@@ -140,16 +306,37 @@ function getDeleteDelayMs(deleteAfter) {
  * グループスレッドIDを生成（チャンネルIDベース、末尾に_gを追加）
  */
 function getGroupThreadId(guildId, channelId) {
-  return `thread-${guildId}_${channelId}_g`;
+    return `thread-${guildId}_${channelId}_g`;
+}
+
+function getGuildTempChannels(guildId) {
+  return Object.entries(tempChannels)
+    .filter(([key]) => key.startsWith(`${guildId}-`))
+    .map(([key, data]) => {
+      const [, channelId] = key.split('-');
+      return { channelId, ...data };
+    });
+}
+
+function createPendingSelection(data) {
+  const requestId = randomUUID();
+  pendingChannelSelections.set(requestId, { ...data, createdAt: Date.now() });
+  setTimeout(() => {
+    const stored = pendingChannelSelections.get(requestId);
+    if (stored && Date.now() - stored.createdAt >= TEMP_CHANNEL_SELECTION_TTL) {
+      pendingChannelSelections.delete(requestId);
+    }
+  }, TEMP_CHANNEL_SELECTION_TTL).unref?.();
+  return requestId;
 }
 
 /**
- * メンション形式を変換: <@&1234567890> または <@1234567890> → <@username>
+ * メンション形式を変換: ロールメンション<@&1234567890> または ニックネームありユーザーメンション<@!1234567890> または ニックネームなしユーザーメンション<@1234567890> → <message_for_user: username>
  */
 async function convertMentionsToReadable(content, guild) {
   let convertedContent = content;
   
-  // ユーザーメンションの変換: <@1234567890> または <@!1234567890>
+  // サーバーニックネームありユーザーメンションの変換: <message_for_user: 1234567890>
   const userMentionRegex = /<@!?(\d+)>/g;
   let match;
   while ((match = userMentionRegex.exec(content)) !== null) {
@@ -157,7 +344,7 @@ async function convertMentionsToReadable(content, guild) {
     try {
       const member = await guild.members.fetch(userId);
       if (member) {
-        convertedContent = convertedContent.replace(match[0], `<@${member.user.username}>`);
+        convertedContent = convertedContent.replace(match[0], `<message_for_user: ${member.user.username}>`);
       }
     } catch (error) {
       console.error(`[Mention] Failed to fetch user ${userId}:`, error.message);
@@ -170,7 +357,21 @@ async function convertMentionsToReadable(content, guild) {
     const roleId = match[1];
     const role = guild.roles.cache.get(roleId);
     if (role) {
-      convertedContent = convertedContent.replace(match[0], `<@${role.name}>`);
+      convertedContent = convertedContent.replace(match[0], `<message_for_role: ${role.name}>`);
+    }
+  }
+  
+  // 残りのサーバーニックネームなしユーザーメンションの変換: <message_for_user: 1234567890>
+  const nicknamelessUserMentionRegex = /<@?(\d+)>/g;
+  while ((match = nicknamelessUserMentionRegex.exec(convertedContent)) !== null) {
+    const userId = match[1];
+    try {
+      const member = await guild.members.fetch(userId);
+      if (member) {
+        convertedContent = convertedContent.replace(match[0], `<message_for_user: ${member.user.username}>`);
+      }
+    } catch (error) {
+      console.error(`[Mention] Failed to fetch user ${userId}:`, error.message);
     }
   }
   
@@ -250,7 +451,7 @@ async function checkAndDeleteTempChannels() {
                 console.log(`[AutoReply] Generating response for channel ${channelId} (${channelData.name})`);
                 
                 // 応答を生成（通常のメッセージ送信APIを使用）
-                const response = await sendMessage(CONFIG.BOT_USER_ID, guildId, threadId, '（会話を続けます）', CONFIG.DEFAULT_MODEL);
+                const response = await sendMessage(CONFIG.BOT_USER_ID, guildId, threadId, '（会話を続けます）', false);
 
                 // Discordチャンネルに送信
                 await sendLongMessage(channel, response.assistantMessage.content);
@@ -496,34 +697,34 @@ async function getOrCreateGroupThread(userId, guildId, channelId, channelName, g
   return threadId;
 }
 
-async function sendMessage(userId, guildId, threadId, content, model = CONFIG.DEFAULT_MODEL) {
+async function sendMessage(userId, guildId, threadId, content, saveUserMessage = true, model = undefined) {
   if (userId == CONFIG.BOT_USER_ID) {
     // bot としてリクエスト
     return authenticatedBotRequest(`/api/threads/${threadId}/messages`, guildId, {
       method: 'POST',
-      body: JSON.stringify({ content, model })
+      body: JSON.stringify({ content, model, saveUserMessage })
     });
   } else {
     // user としてリクエスト
     return authenticatedRequest(`/api/threads/${threadId}/messages`, userId, guildId, {
       method: 'POST',
-      body: JSON.stringify({ content, model })
+      body: JSON.stringify({ content, model, saveUserMessage })
     });
   }
 }
 
-async function sendMessageWithMetadata(userId, guildId, threadId, content, metadata, model = CONFIG.DEFAULT_MODEL) {
+async function sendMessageWithMetadata(userId, guildId, threadId, content, metadata, saveUserMessage = true, model = undefined) {
   if (userId == CONFIG.BOT_USER_ID) {
     // bot としてリクエスト
     return authenticatedBotRequest(`/api/threads/${threadId}/messages`, guildId, {
       method: 'POST',
-      body: JSON.stringify({ content, metadata, model })
+      body: JSON.stringify({ content, metadata, model, saveUserMessage })
     });
   } else {
     // user としてリクエスト
     return authenticatedRequest(`/api/threads/${threadId}/messages`, userId, guildId, {
       method: 'POST',
-      body: JSON.stringify({ content, metadata, model })
+      body: JSON.stringify({ content, metadata, model, saveUserMessage })
     });
   }
 }
@@ -539,6 +740,49 @@ async function appendMessage(userId, guildId, threadId, content, metadata) {
   });
 }
 
+async function updateThreadModelRequest(guildId, threadId, model) {
+  const token = await getBotJWTToken(guildId);
+  const response = await fetch(`${CONFIG.API_BASE_URL}/api/threads/${threadId}/model`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ model })
+  });
+
+  if (!response.ok) {
+    let error;
+    try {
+      error = await response.json();
+    } catch {
+      error = {};
+    }
+    throw new Error(error.error || 'モデルの更新に失敗しました');
+  }
+}
+
+async function updateThreadSystemPromptRequest(guildId, threadId, systemPrompt) {
+  const token = await getBotJWTToken(guildId);
+  const response = await fetch(`${CONFIG.API_BASE_URL}/api/threads/${threadId}/system-prompt`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ systemPrompt })
+  });
+
+  if (!response.ok) {
+    let error;
+    try {
+      error = await response.json();
+    } catch {
+      error = {};
+    }
+    throw new Error(error.error || 'システムプロンプトの更新に失敗しました');
+  }
+}
 function createErrorEmbed(message) {
   return new EmbedBuilder().setColor(0xFF0000).setTitle('❌ エラー').setDescription(message).setTimestamp();
 }
@@ -574,34 +818,75 @@ async function sendLongMessage(channel, content) {
   for (const chunk of chunks) await channel.send(chunk);
 }
 
-const commands = [
-  new SlashCommandBuilder().setName('add-user').setDescription('新しいユーザーを追加（Admin専用）')
-    .addUserOption(o => o.setName('user').setDescription('追加するユーザー').setRequired(true))
-    .addStringOption(o => o.setName('authority').setDescription('権限レベル').setRequired(true).addChoices({ name: 'VIP', value: Authority.VIP }, { name: 'User', value: Authority.USER }))
-    .addIntegerOption(o => o.setName('credit').setDescription('初期無料クレジット量').setRequired(false).setMinValue(0)).toJSON(),
-  new SlashCommandBuilder().setName('request-access-user').setDescription('ユーザーからBotへのアクセス権限をリクエスト').toJSON(),
-  new SlashCommandBuilder().setName('my-info').setDescription('自分のアカウント情報を表示').toJSON(),
-  new SlashCommandBuilder().setName('request-access-guild').setDescription('このサーバーからBotへのアクセス権限をリクエスト（Admin専用）').toJSON(),
-  new SlashCommandBuilder()
-    .setName('create-temp-channel')
-    .setDescription('一時的なチャンネルを作成します')
-    .addStringOption(o => o.setName('category').setDescription('カテゴリ名').setRequired(true))
-    .addStringOption(o => o.setName('channel-name').setDescription('チャンネル名').setRequired(true))
-    .addStringOption(o => o.setName('channel-type').setDescription('チャンネルタイプ').setRequired(true)
-      .addChoices(
-        { name: 'テキストチャンネル', value: 'text' },
-        { name: 'ボイスチャンネル', value: 'voice' }
-      ))
-    .addStringOption(o => o.setName('delete-after').setDescription('削除タイミング').setRequired(true)
-      .addChoices(
-        { name: '最終更新/入室から10分後', value: '10min' },
-        { name: '最終更新/入室から1時間後', value: '1hour' },
-        { name: '最終更新/入室から1日後', value: '1day' },
-        { name: '最終更新/入室から3日後', value: '3days' },
-        { name: '最終更新/入室から14日後', value: '14days' }
-      ))
-    .toJSON()
-];
+/**
+ * Slash commandsを動的に生成
+ * @param {Array} modelChoices - モデルの選択肢配列
+ */
+function buildCommands(modelChoices) {
+  return [
+    new SlashCommandBuilder().setName('add-user').setDescription('新しいユーザーを追加（Admin専用）')
+      .addUserOption(o => o.setName('user').setDescription('追加するユーザー').setRequired(true))
+      .addStringOption(o => o.setName('authority').setDescription('権限レベル').setRequired(true).addChoices({ name: 'VIP', value: Authority.VIP }, { name: 'User', value: Authority.USER }))
+      .addIntegerOption(o => o.setName('credit').setDescription('初期無料クレジット量').setRequired(false).setMinValue(0)).toJSON(),
+    new SlashCommandBuilder().setName('request-access-user').setDescription('ユーザーからBotへのアクセス権限をリクエスト').toJSON(),
+    new SlashCommandBuilder().setName('my-info').setDescription('自分のアカウント情報を表示').toJSON(),
+    new SlashCommandBuilder().setName('request-access-guild').setDescription('このサーバーからBotへのアクセス権限をリクエスト（Admin専用）').toJSON(),
+    new SlashCommandBuilder()
+      .setName('create-temp-channel')
+      .setDescription('一時的なチャンネルを作成します')
+      .addStringOption(o => o.setName('category').setDescription('カテゴリ名').setRequired(true))
+      .addStringOption(o => o.setName('channel-name').setDescription('チャンネル名').setRequired(true))
+      .addStringOption(o => o.setName('channel-type').setDescription('チャンネルタイプ').setRequired(true)
+        .addChoices(
+          { name: 'テキストチャンネル', value: 'text' },
+          { name: 'ボイスチャンネル', value: 'voice' }
+        ))
+      .addStringOption(o => o.setName('delete-after').setDescription('削除タイミング').setRequired(true)
+        .addChoices(
+          { name: '最終更新/入室から10分後', value: '10min' },
+          { name: '最終更新/入室から1時間後', value: '1hour' },
+          { name: '最終更新/入室から1日後', value: '1day' },
+          { name: '最終更新/入室から3日後', value: '3days' },
+          { name: '最終更新/入室から14日後', value: '14days' }
+        ))
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName('list-temp-channels')
+      .setDescription('サーバー内の一時的なチャンネルの一覧を表示します')
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName('update-channel-model')
+      .setDescription('一時的なチャンネルのモデルを変更します')
+      .addStringOption(o => {
+        const option = o.setName('model').setDescription('使用するモデル').setRequired(true);
+        // 最大25個までの選択肢を追加（Discordの制限）
+        const choices = modelChoices.slice(0, 25);
+        if (choices.length > 0) {
+          option.addChoices(...choices);
+        }
+        return option;
+      })
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName('update-channel-system-prompt')
+      .setDescription('一時的なチャンネルのシステムプロンプトを変更します')
+      .addStringOption(o => o.setName('system_prompt').setDescription('新しいシステムプロンプト').setRequired(true))
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName('one-shot')
+      .setDescription('単発生成モードを開始します（リプライで会話・3日間有効）')
+      .addStringOption(o => {
+        const option = o.setName('model').setDescription('使用するモデル').setRequired(true);
+        const choices = modelChoices.slice(0, 25);
+        if (choices.length > 0) {
+          option.addChoices(...choices);
+        }
+        return option;
+      })
+      .addStringOption(o => o.setName('system_prompt').setDescription('システムプロンプト（オプション）').setRequired(false))
+      .toJSON()
+  ];
+}
 
 async function handleAddUser(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -865,7 +1150,365 @@ async function handleCreateTempChannel(interaction) {
   }
 }
 
+async function handleListTempChannels(interaction) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const guildId = interaction.guild?.id;
+    
+    if (!guildId) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このコマンドはサーバーで実行してください。')] });
+      return;
+    }
+
+    // このサーバーの一時チャンネルを取得
+    const guildTempChannels = Object.entries(tempChannels)
+      .filter(([key]) => key.startsWith(`${guildId}-`))
+      .map(([key, data]) => {
+        const channelId = key.split('-')[1];
+        return { channelId, ...data };
+      });
+
+    if (guildTempChannels.length === 0) {
+      await interaction.editReply({ 
+        embeds: [createInfoEmbed('一時チャンネル一覧', 'このサーバーには一時チャンネルがありません。')] 
+      });
+      return;
+    }
+
+    const deleteTimeDesc = {
+      '10min': '10分',
+      '1hour': '1時間',
+      '1day': '1日',
+      '3days': '3日',
+      '14days': '14日'
+    };
+
+    // 一覧を作成
+    const embed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('📋 一時チャンネル一覧')
+      .setDescription(`このサーバーには ${guildTempChannels.length} 個の一時チャンネルがあります。`)
+      .setTimestamp();
+
+    for (const channel of guildTempChannels.slice(0, 25)) { // Discord Embedの制限: 25 fields
+      const deleteDelay = getDeleteDelayMs(channel.deleteAfter);
+      const deleteTime = channel.lastActivity + deleteDelay;
+      const timeRemaining = deleteTime - Date.now();
+      const minutesRemaining = Math.floor(timeRemaining / (60 * 1000));
+      const hoursRemaining = Math.floor(minutesRemaining / 60);
+      
+      let timeRemainingStr;
+      if (hoursRemaining > 24) {
+        const daysRemaining = Math.floor(hoursRemaining / 24);
+        timeRemainingStr = `約${daysRemaining}日`;
+      } else if (hoursRemaining > 0) {
+        timeRemainingStr = `約${hoursRemaining}時間`;
+      } else {
+        timeRemainingStr = `約${minutesRemaining}分`;
+      }
+
+      embed.addFields({
+        name: `${channel.type === 'text' ? '💬' : '🔊'} ${channel.name}`,
+        value: 
+          `チャンネル: <#${channel.channelId}>\n` +
+          `カテゴリ: ${channel.categoryName}\n` +
+          `削除まで: ${timeRemainingStr}\n` +
+          `スレッドID: \`${channel.threadId || 'N/A'}\``,
+        inline: false
+      });
+    }
+
+    if (guildTempChannels.length > 25) {
+      embed.setFooter({ text: `他 ${guildTempChannels.length - 25} チャンネルは表示されていません` });
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error('[Command Error] /list-temp-channels:', error);
+    await interaction.editReply({ embeds: [createErrorEmbed(`エラーが発生しました: ${error.message}`)] });
+  }
+}
+
+async function handleUpdateChannelModel(interaction) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const guildId = interaction.guild?.id;
+    const userId = interaction.user.id;
+    const model = interaction.options.getString('model');
+    
+    if (!guildId) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このコマンドはサーバーで実行してください。')] });
+      return;
+    }
+
+    // 権限チェック（チャンネル管理権限が必要）
+    const member = await interaction.guild.members.fetch(userId);
+    if (!member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このコマンドを使用するには「チャンネルの管理」権限が必要です。')] });
+      return;
+    }
+
+    // このサーバーの一時チャンネルを取得
+    const guildTempChannels = getGuildTempChannels(guildId);
+    
+    if (guildTempChannels.length === 0) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このサーバーには一時チャンネルがありません。')] });
+      return;
+    }
+
+    // セレクトメニューを作成
+    const requestId = createPendingSelection({
+      type: 'model',
+      guildId,
+      userId,
+      value: model
+    });
+
+    const row = buildTempChannelSelectRow(guildTempChannels, requestId, 'モデルを変更するチャンネルを選択');
+    
+    if (!row) {
+      await interaction.editReply({ embeds: [createErrorEmbed('チャンネル選択メニューの作成に失敗しました。')] });
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('🔧 チャンネルのモデルを変更')
+      .setDescription(`モデルを変更する一時チャンネルを選択してください。\n新しいモデル: **${model}**`)
+      .setFooter({ text: 'この選択は10分間有効です' })
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed], components: [row] });
+  } catch (error) {
+    console.error('[Command Error] /update-channel-model:', error);
+    await interaction.editReply({ embeds: [createErrorEmbed(`エラーが発生しました: ${error.message}`)] });
+  }
+}
+
+async function handleUpdateChannelSystemPrompt(interaction) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const guildId = interaction.guild?.id;
+    const userId = interaction.user.id;
+    const systemPrompt = interaction.options.getString('system_prompt');
+    
+    if (!guildId) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このコマンドはサーバーで実行してください。')] });
+      return;
+    }
+
+    // 権限チェック（チャンネル管理権限が必要）
+    const member = await interaction.guild.members.fetch(userId);
+    if (!member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このコマンドを使用するには「チャンネルの管理」権限が必要です。')] });
+      return;
+    }
+
+    // このサーバーの一時チャンネルを取得
+    const guildTempChannels = getGuildTempChannels(guildId);
+    
+    if (guildTempChannels.length === 0) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このサーバーには一時チャンネルがありません。')] });
+      return;
+    }
+
+    // セレクトメニューを作成
+    const requestId = createPendingSelection({
+      type: 'system_prompt',
+      guildId,
+      userId,
+      value: systemPrompt
+    });
+
+    const row = buildTempChannelSelectRow(guildTempChannels, requestId, 'システムプロンプトを変更するチャンネルを選択');
+    
+    if (!row) {
+      await interaction.editReply({ embeds: [createErrorEmbed('チャンネル選択メニューの作成に失敗しました。')] });
+      return;
+    }
+
+    const promptPreview = systemPrompt.length > 100 
+      ? systemPrompt.substring(0, 100) + '...' 
+      : systemPrompt;
+
+    const embed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('🔧 チャンネルのシステムプロンプトを変更')
+      .setDescription(`システムプロンプトを変更する一時チャンネルを選択してください。\n新しいプロンプト: ${promptPreview}`)
+      .setFooter({ text: 'この選択は10分間有効です' })
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed], components: [row] });
+  } catch (error) {
+    console.error('[Command Error] /update-channel-system-prompt:', error);
+    await interaction.editReply({ embeds: [createErrorEmbed(`エラーが発生しました: ${error.message}`)] });
+  }
+}
+
+async function handleOneShot(interaction) {
+  await interaction.deferReply();
+  try {
+    const guildId = interaction.guild?.id || 'dm';
+    const userId = interaction.user.id;
+    const model = interaction.options.getString('model');
+    const systemPrompt = interaction.options.getString('system_prompt') || 'あなたは親切なアシスタントです。';
+    
+    if (guildId !== 'dm' && !isGuildEnabled(guildId)) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このサーバーではBotが有効化されていません。')] });
+      return;
+    }
+
+    // ユーザー情報確認
+    const user = await getUserInfo(userId, guildId);
+    if (!user) {
+      await interaction.editReply({ embeds: [createInfoEmbed('アカウント未登録', 'Botを使用するには、まず `/request-access-user` コマンドでアクセスをリクエストしてください。')] });
+      return;
+    }
+    
+    if (user.authority === Authority.PENDING) {
+      await interaction.editReply({ embeds: [createInfoEmbed('承認待ち', 'アクセスリクエストは送信済みです。管理者の承認をお待ちください。')] });
+      return;
+    }
+    
+    if (user.authority === Authority.STOPPED || user.authority === Authority.BANNED) {
+      await interaction.editReply({ embeds: [createErrorEmbed('アカウントが停止またはBANされています。')] });
+      return;
+    }
+
+    // 定型文を返す
+    const expiryDate = new Date(Date.now() + (3 * 24 * 60 * 60 * 1000));
+    const embed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('🤖 単発生成モード')
+      .setDescription(
+        'このメッセージにリプライして会話を開始してください。\n' +
+        `⏰ **有効期限**: ${expiryDate.toLocaleString('ja-JP')} まで（3日間）`
+      )
+      .addFields(
+        { name: 'モデル', value: model, inline: true },
+        { name: 'システムプロンプト', value: systemPrompt.length > 100 ? systemPrompt.substring(0, 100) + '...' : systemPrompt, inline: false }
+      )
+      .setFooter({ text: 'リプライを続けることで会話履歴が保持されます（3日後に自動削除）' })
+      .setTimestamp();
+
+    const reply = await interaction.editReply({ embeds: [embed] });
+
+    // 会話情報を保存
+    oneShotConversations[reply.id] = {
+      userId,
+      guildId,
+      model,
+      systemPrompt,
+      createdAt: Date.now(),
+      parentMessageId: null // これは初回メッセージなので親はなし
+    };
+    await saveOneShotConversations();
+
+    console.log(`[OneShot] Started conversation: ${reply.id} by user ${userId}`);
+  } catch (error) {
+    console.error('[Command Error] /one-shot:', error);
+    await interaction.editReply({ embeds: [createErrorEmbed(`エラーが発生しました: ${error.message}`)] });
+  }
+}
+
+// セレクトメニューのインタラクション処理を追加
 client.on('interactionCreate', async interaction => {
+  // セレクトメニューの処理
+  if (interaction.isStringSelectMenu()) {
+    const [customId, requestId] = interaction.customId.split(':');
+    
+    if (customId === TEMP_CHANNEL_SELECT_CUSTOM_ID) {
+      await interaction.deferUpdate();
+      
+      try {
+        const pendingSelection = pendingChannelSelections.get(requestId);
+        
+        if (!pendingSelection) {
+          await interaction.followUp({ 
+            embeds: [createErrorEmbed('この選択は期限切れです。コマンドを再度実行してください。')], 
+            flags: MessageFlags.Ephemeral 
+          });
+          return;
+        }
+
+        // 権限確認
+        if (pendingSelection.userId !== interaction.user.id) {
+          await interaction.followUp({ 
+            embeds: [createErrorEmbed('このメニューを操作する権限がありません。')], 
+            flags: MessageFlags.Ephemeral 
+          });
+          return;
+        }
+
+        const selectedChannelId = interaction.values[0];
+        const key = `${pendingSelection.guildId}-${selectedChannelId}`;
+        const channelData = tempChannels[key];
+        
+        if (!channelData) {
+          await interaction.followUp({ 
+            embeds: [createErrorEmbed('選択されたチャンネルは一時チャンネルとして登録されていません。')], 
+            flags: MessageFlags.Ephemeral 
+          });
+          return;
+        }
+
+        const threadId = channelData.threadId;
+        if (!threadId) {
+          await interaction.followUp({ 
+            embeds: [createErrorEmbed('このチャンネルにはスレッドIDが設定されていません。')], 
+            flags: MessageFlags.Ephemeral 
+          });
+          return;
+        }
+
+        // タイプに応じて処理
+        if (pendingSelection.type === 'model') {
+          await updateThreadModelRequest(pendingSelection.guildId, threadId, pendingSelection.value);
+          
+          await interaction.followUp({ 
+            embeds: [createSuccessEmbed(
+              'モデルを更新しました',
+              `チャンネル: <#${selectedChannelId}>\n新しいモデル: **${pendingSelection.value}**`
+            )], 
+            flags: MessageFlags.Ephemeral 
+          });
+
+          console.log(`[Command] Updated model for channel ${selectedChannelId} to ${pendingSelection.value}`);
+        } else if (pendingSelection.type === 'system_prompt') {
+          await updateThreadSystemPromptRequest(pendingSelection.guildId, threadId, pendingSelection.value);
+          
+          const promptPreview = pendingSelection.value.length > 100 
+            ? pendingSelection.value.substring(0, 100) + '...' 
+            : pendingSelection.value;
+
+          await interaction.followUp({ 
+            embeds: [createSuccessEmbed(
+              'システムプロンプトを更新しました',
+              `チャンネル: <#${selectedChannelId}>\n新しいプロンプト: ${promptPreview}`
+            )], 
+            flags: MessageFlags.Ephemeral 
+          });
+
+          console.log(`[Command] Updated system prompt for channel ${selectedChannelId}`);
+        }
+
+        // 使用済みの選択を削除
+        pendingChannelSelections.delete(requestId);
+
+        // メッセージのコンポーネントを削除
+        await interaction.editReply({ components: [] });
+
+      } catch (error) {
+        console.error('[SelectMenu Error]:', error);
+        await interaction.followUp({ 
+          embeds: [createErrorEmbed(`エラーが発生しました: ${error.message}`)], 
+          flags: MessageFlags.Ephemeral 
+        });
+      }
+    }
+  }
+
+  // スラッシュコマンドの処理
   if (!interaction.isChatInputCommand()) return;
   try {
     switch (interaction.commandName) {
@@ -874,6 +1517,10 @@ client.on('interactionCreate', async interaction => {
       case 'my-info': await handleMyInfo(interaction); break;
       case 'request-access-guild': await handleRequestAccessGuild(interaction); break;
       case 'create-temp-channel': await handleCreateTempChannel(interaction); break;
+      case 'list-temp-channels': await handleListTempChannels(interaction); break;
+      case 'update-channel-model': await handleUpdateChannelModel(interaction); break;
+      case 'update-channel-system-prompt': await handleUpdateChannelSystemPrompt(interaction); break;
+      case 'one-shot': await handleOneShot(interaction); break;
       default: await interaction.reply({ content: '不明なコマンドです。', flags: MessageFlags.Ephemeral });
     }
   } catch (error) {
@@ -887,6 +1534,199 @@ client.on('interactionCreate', async interaction => {
 client.on('messageCreate', async (message) => {
   // 自分自身のbotのメッセージは無視（二重追加を防ぐ）
   if (message.author.id === client.user.id) return;
+  
+  // 単発生成モードのリプライ処理
+  if (message.reference && message.reference.messageId) {
+    const referencedMessageId = message.reference.messageId;
+    
+    // リプライ先が単発生成モードの会話の一部かチェック
+    if (oneShotConversations[referencedMessageId]) {
+      try {
+        const conversationData = oneShotConversations[referencedMessageId];
+        const userId = message.author.id;
+        const guildId = message.guild?.id || 'dm';
+        
+        // ユーザー情報確認
+        const user = await getUserInfo(userId, guildId);
+        if (!user || user.authority === Authority.PENDING || user.authority === Authority.STOPPED || user.authority === Authority.BANNED) {
+          return; // 権限がない場合は無視
+        }
+        
+        // クレジットチェック
+        if (user.authority !== Authority.ADMIN && user.authority !== Authority.VIP) {
+          const totalCredit = (user.paid_credit || 0) + (user.remaining_credit || 0);
+          if (totalCredit < 0) {
+            await message.reply({ embeds: [createErrorEmbed('クレジット残高が不足しています。')] });
+            return;
+          }
+        }
+        
+        // リプライチェーンを遡って会話履歴を構築
+        const messages = [];
+        let currentMessage = message;
+        const visitedMessages = new Set(); // 無限ループ防止
+        
+        // 最新のユーザーメッセージを追加
+        messages.unshift({
+          role: 'user',
+          content: message.content
+        });
+        
+        // リプライチェーンを遡る
+        while (currentMessage.reference && currentMessage.reference.messageId) {
+          const refId = currentMessage.reference.messageId;
+          
+          if (visitedMessages.has(refId)) {
+            break; // 無限ループ防止
+          }
+          visitedMessages.add(refId);
+          
+          try {
+            const refMessage = await message.channel.messages.fetch(refId);
+            
+            // 初回の定型文メッセージはスキップ
+            if (refMessage.embeds && refMessage.embeds.length > 0 && 
+                refMessage.embeds[0].title === '🤖 単発生成モード') {
+              break;
+            }
+            
+            // メッセージをhistoryに追加（逆順なので先頭に追加）
+            if (refMessage.author.id === client.user.id) {
+              messages.unshift({
+                role: 'assistant',
+                content: refMessage.content
+              });
+            } else {
+              messages.unshift({
+                role: 'user',
+                content: refMessage.content
+              });
+            }
+            
+            currentMessage = refMessage;
+          } catch (error) {
+            console.error(`[OneShot] Failed to fetch message ${refId}:`, error);
+            break;
+          }
+        }
+        
+        // typing表示
+        await message.channel.sendTyping();
+        
+        // AIにリクエスト送信（直接OpenAI APIを使用）
+        console.log(`[OneShot] Processing conversation with ${messages.length} messages`);
+        
+        // ユーザーのJWTトークンを取得してAPIリクエスト
+        const token = await getUserJWTToken(userId, guildId);
+        
+        // 一時的なスレッドを作成してメッセージを送信
+        const tempThreadResponse = await fetch(`${CONFIG.API_BASE_URL}/api/threads`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            title: `OneShot-${Date.now()}`,
+            systemPrompt: conversationData.systemPrompt,
+            model: conversationData.model
+          })
+        });
+        
+        if (!tempThreadResponse.ok) {
+          throw new Error('一時スレッドの作成に失敗しました');
+        }
+        
+        const tempThread = await tempThreadResponse.json();
+        const tempThreadId = tempThread.id;
+        
+        // メッセージ履歴を追加（最後のメッセージ以外）
+        for (let i = 0; i < messages.length - 1; i++) {
+          const msg = messages[i];
+          await fetch(`${CONFIG.API_BASE_URL}/api/threads/${tempThreadId}/messages/append`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              role: msg.role,
+              content: msg.content
+            })
+          });
+        }
+        
+        // 最後のメッセージを送信してレスポンスを取得
+        const finalMessageResponse = await fetch(`${CONFIG.API_BASE_URL}/api/threads/${tempThreadId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            content: messages[messages.length - 1].content,
+            model: conversationData.model
+          })
+        });
+        
+        if (!finalMessageResponse.ok) {
+          const error = await finalMessageResponse.json();
+          throw new Error(error.error || 'AI応答の生成に失敗しました');
+        }
+        
+        const finalMessageData = await finalMessageResponse.json();
+        const assistantMessage = finalMessageData.assistantMessage.content;
+        
+        // 応答を送信
+        const reply = await message.reply(assistantMessage);
+        
+        // 新しいリプライを会話データに追加
+        oneShotConversations[reply.id] = {
+          userId: conversationData.userId, // 元の会話の開始者のID
+          guildId: conversationData.guildId,
+          model: conversationData.model,
+          systemPrompt: conversationData.systemPrompt,
+          createdAt: Date.now(),
+          parentMessageId: referencedMessageId
+        };
+        await saveOneShotConversations();
+        
+        // クレジット残高警告
+        if (finalMessageData.user) {
+          const paidCredit = finalMessageData.user.paid_credit || 0;
+          const freeCredit = finalMessageData.user.remaining_credit || 0;
+          const totalCredit = paidCredit + freeCredit;
+          
+          if (totalCredit < 1000000) {
+            const warningEmbed = new EmbedBuilder()
+              .setColor(0xFFAA00)
+              .setTitle('⚠️ クレジット残高警告')
+              .setDescription(
+                `クレジット残高が少なくなっています。\n\n` +
+                `💳 **有料クレジット**: ${paidCredit.toLocaleString()} credits\n` +
+                `🎁 **無料クレジット**: ${freeCredit.toLocaleString()} credits\n` +
+                `📊 **合計**: ${totalCredit.toLocaleString()} credits`
+              );
+            
+            await message.channel.send({ embeds: [warningEmbed] });
+          }
+        }
+        
+        console.log(`[OneShot] Generated response for conversation ${referencedMessageId}`);
+        
+        // 一時スレッドを削除（オプション）
+        // await fetch(`${CONFIG.API_BASE_URL}/api/threads/${tempThreadId}`, {
+        //   method: 'DELETE',
+        //   headers: { 'Authorization': `Bearer ${token}` }
+        // });
+        
+      } catch (error) {
+        console.error('[OneShot Error]:', error);
+        await message.reply({ embeds: [createErrorEmbed(`エラーが発生しました: ${error.message}`)] });
+      }
+      return; // 単発生成モードの処理が完了したので終了
+    }
+  }
   
   // 他のbotのメッセージの場合
   if (message.author.bot) {
@@ -1225,6 +2065,12 @@ client.once(Events.ClientReady, async (readyClient) => {
     
   // 一時チャンネルデータを読み込み
   await loadTempChannels();
+  
+  // 単発生成モード会話データを読み込み
+  await loadOneShotConversations();
+  
+  // 古い単発生成モード会話をクリーンアップ
+  await cleanupOldOneShotConversations();
 
   // トークンキャッシュのクリーンアップを定期実行（1時間ごと）
   setInterval(() => {
@@ -1246,11 +2092,21 @@ client.once(Events.ClientReady, async (readyClient) => {
     await checkAndDeleteTempChannels();
   }, CONFIG.AUTO_REPLY_INTERVAL);
   
+  // 古い単発生成モード会話を定期的にクリーンアップ（1時間ごと）
+  setInterval(async () => {
+    await cleanupOldOneShotConversations();
+  }, 60 * 60 * 1000);
+  
   // 起動時にも一度チェック
   await checkAndDeleteTempChannels();
   
   try {
+    console.log('\nFetching available models from API...');
+    availableModels = await fetchAvailableModels();
+    console.log(`✅ Loaded ${availableModels.length} models`);
+    
     console.log('\nRegistering slash commands...');
+    const commands = buildCommands(availableModels);
     const rest = new REST({ version: '10' }).setToken(CONFIG.DISCORD_BOT_TOKEN);
     await rest.put(Routes.applicationCommands(CONFIG.DISCORD_APP_ID), { body: commands });
     console.log('✅ Slash commands registered successfully');

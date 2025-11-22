@@ -598,14 +598,13 @@ app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req
   try {
     const { threadId } = req.params;
     const { content, model, responseFormat, reasoningEffort, metadata } = req.body;
-    
+    const saveUserMessage = req.body.saveUserMessage || true;
+
     const thread = await helpers.readThread(threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
 
     const { thread: hydratedThread } = await helpers.refreshThreadDerivedState(thread, { persist: false });
     const developerPrompt = hydratedThread.systemPrompt;
-
-    let conversationHistory = hydratedThread.messages.map(m => ({ role: m.role, content: m.content }));
 
     // モデルの優先順位: リクエスト > スレッド > デフォルト
     let selectedModel = model || thread.model || configs.DEFAULT_MODEL;
@@ -648,21 +647,38 @@ app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req
     if (metadata) {
       userMessage.metadata = metadata;
     }
-    thread.messages.push(userMessage);
-    console.log("thread")
-    console.log(thread)
-    // 一旦ユーザーメッセージを保存
-    thread.updatedAt = new Date().toISOString();
-    await helpers.writeThread(threadId, thread);
     
     let assistantMessage;
     try {
-      // Responses APIの形式に合わせる
-      let conversationHistory = thread.messages.map(m => ({
-        role: m.role,
-        content: m.content
-      }));
-      
+     // ユーザーメッセージを会話ログとして保存する場合と、そうでない場合（グループ会話で会話の継続を促す場合など）で扱いを変える
+     let conversationHistory = {};
+     if (saveUserMessage === true) {
+       // ユーザーメッセージをthread変数に追加
+       thread.messages.push(userMessage);
+       console.log("thread")
+       console.log(thread)
+ 
+       // 一旦ユーザーメッセージを保存
+       thread.updatedAt = new Date().toISOString();
+       await helpers.writeThread(threadId, thread);
+ 
+       // Responses APIの形式に合わせる
+       conversationHistory = thread.messages.map(m => ({
+         role: m.role,
+         content: m.content
+       }));
+     } else {
+       console.log("thread")
+       console.log(thread)
+ 
+       // Responses APIの形式に合わせる
+       conversationHistory = thread.messages.map(m => ({
+         role: m.role,
+         content: m.content
+       }));
+       conversationHistory.push({role: userMessage.role, content: userMessage.content});
+     }
+ 
       console.log(`Sending request to ${selectedModel}...`);
 
       // カスタムツールの定義
@@ -1483,7 +1499,7 @@ If start_pattern matches multiple locations, the operation is applied to all mat
       await helpers.writeThreads(threads);
     }
     
-  res.json({
+    res.json({
       userMessage,
       assistantMessage,
       thread: {

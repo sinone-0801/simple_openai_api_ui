@@ -41,8 +41,14 @@ npm start
     Shift-jis対応
 
     1. レスポンシブ対応
-    2. システムプロンプト編集と同様に、応答スキーマの設定をUIから可能に
     3. MCPサーバーの追加
 
     manage-pending-users.js の UX を user-manager.js 方式に変更
     discordでartifactが作られたらchannelにリンクを貼る...ことは認証しないとできないので、生ファイルを投稿
+
+    server.js の以下の部分で、 OpenAI API へメタデータが送信できていないので、 Assistant API の Thread 機能を使う必要あり（あとメッセージの送信時間も送れていない）
+    // メッセージ送信と応答生成
+    app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req, res)
+
+    discord-botでのtools禁止オプション追加
+    名前などのbotの人格設定部分をsystempromptに含めるべき
