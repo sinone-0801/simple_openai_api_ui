@@ -526,7 +526,7 @@ async function exportThreadsToCSV() {
     return;
   }
 
-  const filepath = path.join(__dirname, 'data', filename.trim());
+  const filepath = path.join(DATA_DIR, filename.trim());
 
   try {
     const threads = await loadThreads();
@@ -568,7 +568,7 @@ async function exportArtifactsToCSV() {
     return;
   }
 
-  const filepath = path.join(__dirname, 'data', filename.trim());
+  const filepath = path.join(DATA_DIR, filename.trim());
 
   try {
     const artifacts = await getAllArtifacts();

@@ -886,3 +886,89 @@ export function validateModel(model) {
 export function isReasoningModel(model) {
   return configs.REASONING_MODELS.includes(model);
 }
+
+// ====================
+// グループスレッド管理
+// ====================
+
+/**
+ * グループスレッドIDかどうかを判定
+ * グループスレッドIDは末尾が "_g" で終わる
+ */
+export function isGroupThreadId(threadId) {
+  return threadId && threadId.endsWith('_g');
+}
+
+/**
+ * チャンネルIDからグループスレッドIDを生成
+ */
+export function getGroupThreadId(channelId) {
+  return `thread-${channelId}_g`;
+}
+
+/**
+ * グループスレッドを作成または取得
+ */
+export async function getOrCreateGroupThread(userId, guildId, channelId, channelName, guildName, options = {}) {
+  const threadId = getGroupThreadId(channelId);
+  
+  // 既存のスレッドがあるか確認
+  const existingThread = await readThread(threadId);
+  if (existingThread) {
+    return threadId;
+  }
+  
+  // 新規作成
+  const timestamp = new Date().toISOString();
+  const {
+    title = `Group: ${channelName}`,
+    systemPrompt = configs.DEFAULT_SYSTEM_PROMPT,
+    model = configs.DEFAULT_MODEL,
+    responseFormat = null,
+    reasoningEffort = 'medium'
+  } = options;
+  
+  const userPrompt = (systemPrompt || configs.DEFAULT_SYSTEM_PROMPT).trim();
+  
+  // Response Formatを登録
+  const responseFormatHash = responseFormat ? await registerResponseFormat(responseFormat) : null;
+  
+  const newThreadSummary = {
+    id: threadId,
+    title,
+    userId,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    artifactIds: [],
+    metadata: {
+      isGroupThread: true,
+      guildId,
+      guildName,
+      channelId,
+      channelName
+    }
+  };
+  
+  const threadData = {
+    id: threadId,
+    title: newThreadSummary.title,
+    systemPromptUser: userPrompt,
+    userId,
+    systemPrompt: composeSystemPrompt(userPrompt, []),
+    model,
+    responseFormatHash,
+    reasoningEffort,
+    messages: [],
+    artifactIds: [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    metadata: newThreadSummary.metadata
+  };
+  
+  const threads = await readThreads();
+  threads.threads.push(newThreadSummary);
+  await writeThreads(threads);
+  await writeThread(threadId, threadData);
+  
+  return threadId;
+}

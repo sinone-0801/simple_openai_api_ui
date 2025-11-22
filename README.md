@@ -45,3 +45,4 @@ npm start
     3. MCPサーバーの追加
 
     manage-pending-users.js の UX を user-manager.js 方式に変更
+    discordでartifactが作られたらchannelにリンクを貼る...ことは認証しないとできないので、生ファイルを投稿

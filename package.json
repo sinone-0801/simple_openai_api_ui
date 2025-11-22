@@ -6,8 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js",
-    "start:mcp": "node node_modules/web-search-mcp-server/dist/server.js"
+    "dev": "node --watch server.js"
   },
   "keywords": [
     "gpt-5-codex",

@@ -1,8 +1,15 @@
-// discord-bot.js - Password Authentication Version
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
+// discord-bot.js
+import { Client, Events, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, MessageFlags, ChannelType, PermissionFlagsBits } from 'discord.js';
 import fetch from 'node-fetch';
 import 'dotenv/config';
 import { generateGuildAuthToken, isGuildEnabled, loadGuildConfig, saveGuildRequest } from './guild-manager.js';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DISCORD_DATA_DIR = path.join(__dirname, 'data');
 
 const CONFIG = {
   API_BASE_URL: process.env.API_BASE_URL || 'http://localhost:3000',
@@ -14,17 +21,263 @@ const CONFIG = {
   BOT_DEFAULT_CREDIT: parseInt(process.env.BOT_DEFAULT_CREDIT || '10000000'),
   DEFAULT_MODEL: process.env.ORCHESTRATOR_MODEL || 'gpt-5-codex',
   MAX_MESSAGE_LENGTH: 2000,
-  DEBUG: process.env.DEBUG || 'true'
+  DEBUG: process.env.DEBUG || 'true',
+  TEMP_CHANNELS_FILE: path.join(DISCORD_DATA_DIR, 'temp-channels.json'),
+  AUTO_REPLY_INTERVAL: 5 * 60 * 1000, // 5分
+  AUTO_REPLY_MIN_IDLE_TIME: 10 * 60 * 1000, // 10分
+  AUTO_REPLY_MIN_TIME_BEFORE_DELETE: 30 * 60 * 1000 // 30分
 };
 
 const Authority = { ADMIN: 'Admin', VIP: 'Vip', USER: 'User', PENDING: 'Pending', STOPPED: 'Stopped', BANNED: 'Banned' };
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers, GatewayIntentBits.MessageContent]
+  intents: [
+    GatewayIntentBits.Guilds, 
+    GatewayIntentBits.GuildMessages, 
+    GatewayIntentBits.GuildMembers, 
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates
+  ]
 });
 
 // JWTトークンキャッシュ（guildId別）
 const tokenCache = new Map();
+
+// 一時チャンネル管理
+let tempChannels = {};
+
+/**
+ * 一時チャンネルデータを読み込む
+ */
+async function loadTempChannels() {
+  try {
+    const data = await fs.readFile(CONFIG.TEMP_CHANNELS_FILE, 'utf-8');
+    tempChannels = JSON.parse(data);
+    console.log(`[TempChannel] Loaded ${Object.keys(tempChannels).length} temporary channels`);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      console.log('[TempChannel] No existing temp channels file, starting fresh');
+      tempChannels = {};
+    } else {
+      console.error('[TempChannel] Error loading temp channels:', error);
+      tempChannels = {};
+    }
+  }
+}
+
+/**
+ * 一時チャンネルデータを保存する
+ */
+async function saveTempChannels() {
+  try {
+    await fs.writeFile(CONFIG.TEMP_CHANNELS_FILE, JSON.stringify(tempChannels, null, 2), 'utf-8');
+    if (CONFIG.DEBUG) {
+      console.log(`[TempChannel] Saved ${Object.keys(tempChannels).length} temporary channels`);
+    }
+  } catch (error) {
+    console.error('[TempChannel] Error saving temp channels:', error);
+  }
+}
+
+/**
+ * 一時チャンネルを登録する
+ */
+async function registerTempChannel(guildId, guildName, channelId, channelData) {
+  const key = `${guildId}-${channelId}`;
+
+  // グループスレッドIDを取得
+  const threadId = await getOrCreateGroupThread(CONFIG.BOT_USER_ID, guildId, channelId, channelData.name, guildName);
+
+  tempChannels[key] = {
+    ...channelData,
+    threadId,
+    guildName,
+    createdAt: Date.now(),
+    lastActivity: Date.now(),
+    lastNonBotActivity: Date.now() // Bot以外の最終アクティビティ
+  };
+  await saveTempChannels();
+}
+
+/**
+ * 一時チャンネルの最終アクティビティを更新する
+ */
+async function updateChannelActivity(guildId, channelId, isBot = false) {
+  const key = `${guildId}-${channelId}`;
+  if (tempChannels[key]) {
+    tempChannels[key].lastActivity = Date.now();
+    if (!isBot) {
+      tempChannels[key].lastNonBotActivity = Date.now();
+    }
+    await saveTempChannels();
+  }
+}
+
+/**
+ * 一時チャンネルを削除する
+ */
+async function unregisterTempChannel(guildId, channelId) {
+  const key = `${guildId}-${channelId}`;
+  delete tempChannels[key];
+  await saveTempChannels();
+}
+
+/**
+ * 削除タイミングのミリ秒変換
+ */
+function getDeleteDelayMs(deleteAfter) {
+  const delays = {
+    '10min': 10 * 60 * 1000,
+    '1hour': 60 * 60 * 1000,
+    '1day': 24 * 60 * 60 * 1000,
+    '3days': 3 * 24 * 60 * 60 * 1000,
+    '14days': 14 * 24 * 60 * 60 * 1000
+  };
+  return delays[deleteAfter] || delays['1hour'];
+}
+
+/**
+ * グループスレッドIDを生成（チャンネルIDベース、末尾に_gを追加）
+ */
+function getGroupThreadId(guildId, channelId) {
+  return `thread-${guildId}_${channelId}_g`;
+}
+
+/**
+ * メンション形式を変換: <@&1234567890> または <@1234567890> → <@username>
+ */
+async function convertMentionsToReadable(content, guild) {
+  let convertedContent = content;
+  
+  // ユーザーメンションの変換: <@1234567890> または <@!1234567890>
+  const userMentionRegex = /<@!?(\d+)>/g;
+  let match;
+  while ((match = userMentionRegex.exec(content)) !== null) {
+    const userId = match[1];
+    try {
+      const member = await guild.members.fetch(userId);
+      if (member) {
+        convertedContent = convertedContent.replace(match[0], `<@${member.user.username}>`);
+      }
+    } catch (error) {
+      console.error(`[Mention] Failed to fetch user ${userId}:`, error.message);
+    }
+  }
+  
+  // ロールメンションの変換: <@&1234567890>
+  const roleMentionRegex = /<@&(\d+)>/g;
+  while ((match = roleMentionRegex.exec(content)) !== null) {
+    const roleId = match[1];
+    const role = guild.roles.cache.get(roleId);
+    if (role) {
+      convertedContent = convertedContent.replace(match[0], `<@${role.name}>`);
+    }
+  }
+  
+  return convertedContent;
+}
+
+/**
+ * 一時チャンネルのチェックと削除、自動応答
+ */
+async function checkAndDeleteTempChannels() {
+  const now = Date.now();
+  const keysToDelete = [];
+
+  for (const [key, channelData] of Object.entries(tempChannels)) {
+    const [guildId, channelId] = key.split('-');
+    const deleteDelay = getDeleteDelayMs(channelData.deleteAfter);
+    const deleteTime = channelData.lastActivity + deleteDelay;
+    const timeUntilDelete = deleteTime - now;
+
+    // チャンネルの存在確認
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) {
+      console.log(`[TempChannel] Guild ${guildId} not found, removing from tracking`);
+      keysToDelete.push(key);
+      continue;
+    }
+
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel) {
+      console.log(`[TempChannel] Channel ${channelId} not found, removing from tracking`);
+      keysToDelete.push(key);
+      continue;
+    }
+
+    // チャンネル削除判定
+    if (now >= deleteTime) {
+      try {
+        await channel.delete('Temporary channel expired');
+        console.log(`[TempChannel] Deleted expired channel: ${channelData.name} (${channelId}) in guild ${guildId}`);
+        keysToDelete.push(key);
+      } catch (error) {
+        console.error(`[TempChannel] Error deleting channel ${channelId}:`, error);
+        keysToDelete.push(key);
+      }
+      continue;
+    }
+
+    // 自動応答の条件チェック（テキストチャンネルのみ）
+    if (channel.type === ChannelType.GuildText) {
+      const timeSinceLastNonBotActivity = now - (channelData.lastNonBotActivity || channelData.lastActivity);
+      
+      // 条件:
+      // 1. チャンネル消滅まで30分以上の猶予がある
+      // 2. 10分以上Bot以外が書き込み/入退室していない
+      if (
+        timeUntilDelete > CONFIG.AUTO_REPLY_MIN_TIME_BEFORE_DELETE &&
+        timeSinceLastNonBotActivity > CONFIG.AUTO_REPLY_MIN_IDLE_TIME
+      ) {
+        try {
+          // スレッドの最後のメッセージを確認
+          const threadId = getGroupThreadId(guildId, channelId);
+          const token = await getBotJWTToken(guildId);
+          
+          const threadResponse = await fetch(`${CONFIG.API_BASE_URL}/api/threads/${threadId}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+
+          if (threadResponse.ok) {
+            const thread = await threadResponse.json();
+            
+            // 最後のメッセージがBot以外のユーザーによるものか確認
+            if (thread.messages && thread.messages.length > 0) {
+              const lastMessage = thread.messages[thread.messages.length - 1];
+              
+              // 最後のメッセージがBotでない場合、自動応答を生成
+              if (lastMessage.role === 'user' && !lastMessage.metadata?.isBot) {
+                console.log(`[AutoReply] Generating response for channel ${channelId} (${channelData.name})`);
+                
+                // 応答を生成（通常のメッセージ送信APIを使用）
+                const response = await sendMessage(CONFIG.BOT_USER_ID, guildId, threadId, '（会話を続けます）', CONFIG.DEFAULT_MODEL);
+
+                // Discordチャンネルに送信
+                await sendLongMessage(channel, response.assistantMessage.content);
+                
+                // 最終アクティビティを更新（Botの書き込みとして）
+                await updateChannelActivity(guildId, channelId, true);
+                
+                console.log(`[AutoReply] Response sent to channel ${channelId}`);
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`[AutoReply] Error generating response for channel ${channelId}:`, error);
+        }
+      }
+    }
+  }
+
+  // 削除されたチャンネルをトラッキングから除外
+  for (const key of keysToDelete) {
+    delete tempChannels[key];
+  }
+
+  if (keysToDelete.length > 0) {
+    await saveTempChannels();
+  }
+}
 
 /**
  * Bot用JWTトークンを取得（キャッシュあり）
@@ -150,11 +403,10 @@ async function apiRequest(endpoint, options = {}) {
 async function authenticatedRequest(endpoint, usrId, guildId = null, options = {}) {
   let token;
   if (guildId !== null && typeof guildId === 'string') {
-    // JWTトークンを取得
+    // エンドユーザーからのリクエストとしてJWTトークンを取得
     const userId = usrId;
     token = await getUserJWTToken(userId, guildId);
   }
-  
   return apiRequest(endpoint, { 
     ...options, 
     headers: { 
@@ -213,10 +465,76 @@ async function getOrCreateThread(userId, guildId, channelId) {
   return newThread.id;
 }
 
-async function sendMessage(userId, guildId, threadId, content, model = CONFIG.DEFAULT_MODEL) {
-  return authenticatedRequest(`/api/threads/${threadId}/messages`, userId, guildId, {
+async function getOrCreateGroupThread(userId, guildId, channelId, channelName, guildName) {
+  const threadId = getGroupThreadId(guildId, channelId);
+  const token = await getBotJWTToken(guildId);
+  
+  // 既存スレッドの確認
+  try {
+    const checkResponse = await fetch(`${CONFIG.API_BASE_URL}/api/threads/${threadId}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (checkResponse.ok) {
+      return threadId;
+    }
+  } catch (error) {
+    // スレッドが存在しない場合は作成
+  }
+  
+  // 新規グループスレッド作成
+  await authenticatedBotRequest('/api/threads', guildId, {
     method: 'POST',
-    body: JSON.stringify({ content, model })
+    body: JSON.stringify({
+      title: `Group: ${channelName}`,
+      systemPrompt: `あなたはDiscordのグループチャンネル「${channelName}」（サーバー: ${guildName}）でのアシスタントです。複数のユーザーと会話します。ユーザーのメッセージにはmetadataとしてuserName, displayNameなどが含まれています。`,
+      model: CONFIG.DEFAULT_MODEL,
+      threadId: threadId
+    })
+  });
+  
+  return threadId;
+}
+
+async function sendMessage(userId, guildId, threadId, content, model = CONFIG.DEFAULT_MODEL) {
+  if (userId == CONFIG.BOT_USER_ID) {
+    // bot としてリクエスト
+    return authenticatedBotRequest(`/api/threads/${threadId}/messages`, guildId, {
+      method: 'POST',
+      body: JSON.stringify({ content, model })
+    });
+  } else {
+    // user としてリクエスト
+    return authenticatedRequest(`/api/threads/${threadId}/messages`, userId, guildId, {
+      method: 'POST',
+      body: JSON.stringify({ content, model })
+    });
+  }
+}
+
+async function sendMessageWithMetadata(userId, guildId, threadId, content, metadata, model = CONFIG.DEFAULT_MODEL) {
+  if (userId == CONFIG.BOT_USER_ID) {
+    // bot としてリクエスト
+    return authenticatedBotRequest(`/api/threads/${threadId}/messages`, guildId, {
+      method: 'POST',
+      body: JSON.stringify({ content, metadata, model })
+    });
+  } else {
+    // user としてリクエスト
+    return authenticatedRequest(`/api/threads/${threadId}/messages`, userId, guildId, {
+      method: 'POST',
+      body: JSON.stringify({ content, metadata, model })
+    });
+  }
+}
+
+async function appendMessage(userId, guildId, threadId, content, metadata) {
+  return authenticatedBotRequest(`/api/threads/${threadId}/messages/append`, guildId, {
+    method: 'POST',
+    body: JSON.stringify({
+      role: 'user',
+      content,
+      metadata
+    })
   });
 }
 
@@ -262,7 +580,26 @@ const commands = [
     .addIntegerOption(o => o.setName('credit').setDescription('初期クレジット量').setRequired(false).setMinValue(0)).toJSON(),
   new SlashCommandBuilder().setName('request-access-user').setDescription('ユーザーからBotへのアクセス権限をリクエスト').toJSON(),
   new SlashCommandBuilder().setName('my-info').setDescription('自分のアカウント情報を表示').toJSON(),
-  new SlashCommandBuilder().setName('request-access-guild').setDescription('このサーバーからBotへのアクセス権限をリクエスト（Admin専用）').toJSON()
+  new SlashCommandBuilder().setName('request-access-guild').setDescription('このサーバーからBotへのアクセス権限をリクエスト（Admin専用）').toJSON(),
+  new SlashCommandBuilder()
+    .setName('create-temp-channel')
+    .setDescription('一時的なチャンネルを作成します')
+    .addStringOption(o => o.setName('category').setDescription('カテゴリ名').setRequired(true))
+    .addStringOption(o => o.setName('channel-name').setDescription('チャンネル名').setRequired(true))
+    .addStringOption(o => o.setName('channel-type').setDescription('チャンネルタイプ').setRequired(true)
+      .addChoices(
+        { name: 'テキストチャンネル', value: 'text' },
+        { name: 'ボイスチャンネル', value: 'voice' }
+      ))
+    .addStringOption(o => o.setName('delete-after').setDescription('削除タイミング').setRequired(true)
+      .addChoices(
+        { name: '最終更新/入室から10分後', value: '10min' },
+        { name: '最終更新/入室から1時間後', value: '1hour' },
+        { name: '最終更新/入室から1日後', value: '1day' },
+        { name: '最終更新/入室から3日後', value: '3days' },
+        { name: '最終更新/入室から14日後', value: '14days' }
+      ))
+    .toJSON()
 ];
 
 async function handleAddUser(interaction) {
@@ -400,6 +737,115 @@ async function handleMyInfo(interaction) {
   }
 }
 
+async function handleCreateTempChannel(interaction) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const guildId = interaction.guild?.id;
+    const userId = interaction.user.id;
+    
+    if (!guildId) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このコマンドはサーバーで実行してください。')] });
+      return;
+    }
+
+    const categoryName = interaction.options.getString('category');
+    const channelName = interaction.options.getString('channel-name');
+    const channelType = interaction.options.getString('channel-type');
+    const deleteAfter = interaction.options.getString('delete-after');
+
+    const guild = interaction.guild;
+
+    // 権限チェック（チャンネル管理権限が必要）
+    const member = await guild.members.fetch(userId);
+    if (!member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+      await interaction.editReply({ embeds: [createErrorEmbed('このコマンドを使用するには「チャンネルの管理」権限が必要です。')] });
+      return;
+    }
+
+    // カテゴリを探す、または作成
+    let category = guild.channels.cache.find(
+      c => c.type === ChannelType.GuildCategory && c.name === categoryName
+    );
+
+    if (!category) {
+      try {
+        category = await guild.channels.create({
+          name: categoryName,
+          type: ChannelType.GuildCategory
+        });
+        console.log(`[TempChannel] Created category: ${categoryName} (${category.id})`);
+      } catch (error) {
+        await interaction.editReply({ embeds: [createErrorEmbed(`カテゴリの作成に失敗しました: ${error.message}`)] });
+        return;
+      }
+    }
+
+    // 既存のチャンネルをチェック
+    const existingChannel = guild.channels.cache.find(
+      c => c.parentId === category.id && c.name === channelName
+    );
+
+    if (existingChannel) {
+      await interaction.editReply({ embeds: [createErrorEmbed(`チャンネル「${channelName}」は既に存在します。`)] });
+      return;
+    }
+
+    // チャンネルを作成
+    const channelTypeMap = {
+      'text': ChannelType.GuildText,
+      'voice': ChannelType.GuildVoice
+    };
+
+    let newChannel;
+    try {
+      newChannel = await guild.channels.create({
+        name: channelName,
+        type: channelTypeMap[channelType],
+        parent: category.id
+      });
+      console.log(`[TempChannel] Created ${channelType} channel: ${channelName} (${newChannel.id})`);
+    } catch (error) {
+      await interaction.editReply({ embeds: [createErrorEmbed(`チャンネルの作成に失敗しました: ${error.message}`)] });
+      return;
+    }
+
+    // 一時チャンネルとして登録
+    await registerTempChannel(guildId, guild.name, newChannel.id, {
+      name: channelName,
+      type: channelType,
+      categoryId: category.id,
+      categoryName: categoryName,
+      deleteAfter: deleteAfter,
+      createdBy: userId
+    });
+
+    const deleteTimeDesc = {
+      '10min': '10分',
+      '1hour': '1時間',
+      '1day': '1日',
+      '3days': '3日',
+      '14days': '14日'
+    };
+
+    const embed = new EmbedBuilder()
+      .setColor(0x00FF00)
+      .setTitle('✅ 一時チャンネルを作成しました')
+      .setDescription(`チャンネル: <#${newChannel.id}>`)
+      .addFields(
+        { name: 'カテゴリ', value: categoryName, inline: true },
+        { name: 'チャンネル名', value: channelName, inline: true },
+        { name: 'タイプ', value: channelType === 'text' ? 'テキスト' : 'ボイス', inline: true },
+        { name: '削除タイミング', value: `最終アクティビティから${deleteTimeDesc[deleteAfter]}後`, inline: false }
+      )
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error('[Command Error] /create-temp-channel:', error);
+    await interaction.editReply({ embeds: [createErrorEmbed(`エラーが発生しました: ${error.message}`)] });
+  }
+}
+
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
   try {
@@ -408,6 +854,7 @@ client.on('interactionCreate', async interaction => {
       case 'request-access-user': await handleRequestAccessUser(interaction); break;
       case 'my-info': await handleMyInfo(interaction); break;
       case 'request-access-guild': await handleRequestAccessGuild(interaction); break;
+      case 'create-temp-channel': await handleCreateTempChannel(interaction); break;
       default: await interaction.reply({ content: '不明なコマンドです。', flags: MessageFlags.Ephemeral });
     }
   } catch (error) {
@@ -417,8 +864,161 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
+// メッセージイベント - テキストチャンネルのアクティビティを追跡とグループチャンネル処理
 client.on('messageCreate', async (message) => {
-  if (message.author.bot || !message.mentions.has(client.user)) return;
+  // 自分自身のbotのメッセージは無視（二重追加を防ぐ）
+  if (message.author.id === client.user.id) return;
+  
+  // 他のbotのメッセージの場合
+  if (message.author.bot) {
+    // tempChannelsに登録されているチャンネルの場合のみ処理
+    if (message.guild && message.channel.type === ChannelType.GuildText) {
+      const key = `${message.guild.id}-${message.channel.id}`;
+      if (tempChannels[key]) {
+        try {
+          const guildId = message.guild.id;
+          const channelId = message.channel.id;
+          const threadId = getGroupThreadId(guildId, channelId);
+          
+          // メンション形式を変換
+          const convertedContent = await convertMentionsToReadable(message.content, message.guild);
+          
+          // メタデータを構築
+          const metadata = {
+            authorId: message.author.id,
+            authorName: message.author.username,
+            authorBot: true,
+            channelId: channelId,
+            guildId: guildId,
+            messageId: message.id,
+            timestamp: message.createdAt.toISOString()
+          };
+          
+          // メッセージをスレッドに追加（appendMessageのみ）
+          await appendMessage(CONFIG.BOT_USER_ID, guildId, threadId, convertedContent, metadata);
+          
+          // アクティビティを更新（Botの書き込み）
+          await updateChannelActivity(guildId, channelId, true);
+          
+          if (CONFIG.DEBUG) {
+            console.log(`[BotMessage] Appended bot message to thread ${threadId}: ${convertedContent.substring(0, 50)}...`);
+          }
+        } catch (error) {
+          console.error('[BotMessage Error]:', error);
+        }
+      }
+    }
+    return;
+  }
+  
+  const guildId = message.guild?.id || 'dm';
+  const channelId = message.channel.id;
+  const key = `${guildId}-${channelId}`;
+  
+  // 一時チャンネルでのメッセージ処理
+  if (message.guild && tempChannels[key]) {
+    // 一時チャンネルのアクティビティを更新（Bot以外）
+    await updateChannelActivity(guildId, channelId, false);
+    
+    // ギルドが有効化されていない場合は静かに無視
+    if (!isGuildEnabled(guildId)) {
+      return;
+    }
+    
+    try {
+      // メンション形式を変換
+      const convertedContent = await convertMentionsToReadable(message.content, message.guild);
+      
+      // メタデータを準備
+      const metadata = {
+        userId: message.author.id,
+        userName: message.author.username,
+        displayName: message.member?.displayName || message.author.username,
+        channelId: channelId,
+        channelName: message.channel.name,
+        categoryName: tempChannels[key].categoryName,
+        guildId: guildId,
+        guildName: message.guild.name,
+        isBot: false
+      };
+      
+      // グループスレッドIDを取得
+      const threadId = await getOrCreateGroupThread(CONFIG.BOT_USER_ID, guildId, channelId, message.channel.name, message.guild.name);
+      
+      // @メンションがある場合は応答を生成
+      if (message.mentions.has(client.user)) {
+        console.log("message");
+        console.log("message");
+        console.log(message);
+        await message.channel.sendTyping();
+        
+        // ユーザー情報を確認
+        const user = await getUserInfo(message.author.id, guildId);
+        console.log("user");
+        console.log("user");
+        console.log(user);
+        if (!user) {
+          await message.reply({ embeds: [createInfoEmbed('アカウント未登録', 'Botを使用するには、まず `/request-access-user` コマンドでアクセスをリクエストしてください。')] });
+          return;
+        }
+        
+        if (user.authority === Authority.PENDING) {
+          await message.reply({ embeds: [createInfoEmbed('承認待ち', 'アクセスリクエストは送信済みです。管理者の承認をお待ちください。')] });
+          return;
+        }
+        
+        if (user.authority === Authority.STOPPED) {
+          await message.reply({ embeds: [createErrorEmbed('アカウントが停止されています。')] });
+          return;
+        }
+        
+        if (user.authority === Authority.BANNED) {
+          await message.reply({ embeds: [createErrorEmbed('アカウントがBANされています。')] });
+          return;
+        }
+        
+        if (user.remaining_credit <= 0) {
+          await message.reply({ embeds: [createErrorEmbed('クレジット残高が不足しています。')] });
+          return;
+        }
+        
+        // 応答を生成
+        const response = await sendMessageWithMetadata(message.author.id, guildId, threadId, convertedContent, metadata);
+        console.log("response");
+        console.log("response");
+        console.log(response);
+        await sendLongMessage(message.channel, response.assistantMessage.content);
+        
+        // アクティビティを更新（Botの書き込み）
+        await updateChannelActivity(guildId, channelId, true);
+        
+        if (response.user && response.user.remaining_credit < 1000000) {
+          await message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFFAA00).setTitle('⚠️ クレジット残高警告').setDescription(`クレジット残高が少なくなっています。\n残高: ${response.user.remaining_credit.toLocaleString()} tokens`)] });
+        }
+      } else {
+        // @メンションがない場合は、メッセージをスレッドに追加するのみ
+        await appendMessage(CONFIG.BOT_USER_ID, guildId, threadId, convertedContent, metadata);
+        
+        if (CONFIG.DEBUG) {
+          console.log(`[Message] Appended to thread ${threadId}: ${convertedContent.substring(0, 50)}...`);
+        }
+      }
+    } catch (error) {
+      console.error('[Message Error]:', error);
+      await message.reply({ embeds: [createErrorEmbed('エラーが発生しました。')] });
+    }
+    return;
+  }
+  
+  // 通常チャンネルでの処理（元の実装を維持）
+  if (message.guild && message.channel.type === ChannelType.GuildText) {
+    const key = `${message.guild.id}-${message.channel.id}`;
+    if (tempChannels[key]) {
+      await updateChannelActivity(message.guild.id, message.channel.id, false);
+    }
+  }
+
+  if (!message.mentions.has(client.user)) return;
   try {
     const userId = message.author.id;
     const guildId = message.guild?.id || 'dm';
@@ -452,6 +1052,8 @@ client.on('messageCreate', async (message) => {
       return;
     }
     const threadId = await getOrCreateThread(userId, guildId, channelId);
+    console.log("通常スレッドのメッセージ")
+
     const response = await sendMessage(userId, guildId, threadId, content);
     await sendLongMessage(message.channel, response.assistantMessage.content);
     if (response.user && response.user.remaining_credit < 1000000) {
@@ -463,7 +1065,34 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-client.once('ready', async () => {
+// ボイス状態変更イベント - ボイスチャンネルのアクティビティを追跡
+client.on('voiceStateUpdate', async (oldState, newState) => {
+  // ユーザーがボイスチャンネルに参加または移動した場合
+  if (newState.channel) {
+    const key = `${newState.guild.id}-${newState.channel.id}`;
+    if (tempChannels[key]) {
+      // Botでないユーザーの場合
+      await updateChannelActivity(newState.guild.id, newState.channel.id, newState.member.user.bot);
+    }
+  }
+  
+  // ユーザーがボイスチャンネルから退出した場合
+  if (oldState.channel) {
+    const key = `${oldState.guild.id}-${oldState.channel.id}`;
+    if (tempChannels[key]) {
+      // チャンネルが空になったかチェック
+      if (oldState.channel.members.size === 0) {
+        // 最終アクティビティを更新（誰もいなくなった時点を記録）
+        await updateChannelActivity(oldState.guild.id, oldState.channel.id, false);
+      } else {
+        // Botでないユーザーの退出の場合
+        await updateChannelActivity(oldState.guild.id, oldState.channel.id, oldState.member.user.bot);
+      }
+    }
+  }
+});
+
+client.once(Events.ClientReady, async (readyClient) => {
   console.log('='.repeat(70));
   console.log(`Logged in as ${client.user.tag}`);
   console.log(`Bot ID: ${client.user.id}`);
@@ -491,7 +1120,10 @@ client.once('ready', async () => {
     console.log('No guilds registered. Use: node guild-manager-cli.js register <guildId> <guildName>');
   }
   console.log('='.repeat(70));
-  
+    
+  // 一時チャンネルデータを読み込み
+  await loadTempChannels();
+
   // トークンキャッシュのクリーンアップを定期実行（1時間ごと）
   setInterval(() => {
     const now = Date.now();
@@ -506,6 +1138,14 @@ client.once('ready', async () => {
       console.log(`[Cache] Cleaned ${cleaned} expired token(s)`);
     }
   }, 60 * 60 * 1000);
+  
+  // 一時チャンネルのチェックと自動応答を定期実行（設定可能な間隔）
+  setInterval(async () => {
+    await checkAndDeleteTempChannels();
+  }, CONFIG.AUTO_REPLY_INTERVAL);
+  
+  // 起動時にも一度チェック
+  await checkAndDeleteTempChannels();
   
   try {
     console.log('\nRegistering slash commands...');

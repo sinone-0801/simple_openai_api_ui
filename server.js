@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import { OAuth2Scopes, PermissionFlagsBits } from 'discord.js';
 import * as auth from './auth.js';
 import * as payment from './payment.js';
 import * as configs from './utils/config.js';
@@ -162,7 +163,9 @@ await helpers.initResponseFormats();
 async function requireAuth(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
-    
+    console.log("authHeader")
+    console.log("authHeader")
+    console.log(authHeader)
     if (!authHeader) {
       return res.status(401).json({ error: 'Authorization header required' });
     }
@@ -274,10 +277,31 @@ app.get('/api/threads/:threadId', requireAuth, async (req, res) => {
 // 新規スレッド作成
 app.post('/api/threads', requireAuth, async (req, res) => {
   try {
-    const { title, systemPrompt, model, responseFormat, reasoningEffort } = req.body;
-    const threadId = helpers.generateId();
+    const { 
+      title, 
+      systemPrompt, 
+      model, 
+      responseFormat, 
+      reasoningEffort,
+      threadId: customThreadId,
+      metadata 
+    } = req.body;
+    
+    // threadIdが指定されている場合はそれを使用、なければ生成
+    const threadId = customThreadId || helpers.generateId();
     const timestamp = new Date().toISOString();
     const userPrompt = (systemPrompt || configs.DEFAULT_SYSTEM_PROMPT).trim();
+
+    // 既存のスレッドIDと重複していないか確認
+    if (customThreadId) {
+      const existingThread = await helpers.readThread(customThreadId);
+      if (existingThread) {
+        return res.status(409).json({ 
+          error: 'Thread ID already exists',
+          threadId: customThreadId 
+        });
+      }
+    }
 
     const modelValidation = helpers.validateModel(model);
     if (!modelValidation.valid) {
@@ -295,6 +319,11 @@ app.post('/api/threads', requireAuth, async (req, res) => {
       updatedAt: timestamp,
       artifactIds: []
     };
+    
+    // メタデータがある場合は追加（グループスレッド対応）
+    if (metadata) {
+      newThreadSummary.metadata = metadata;
+    }
 
     const threadData = {
       id: threadId,
@@ -310,6 +339,11 @@ app.post('/api/threads', requireAuth, async (req, res) => {
       createdAt: timestamp,
       updatedAt: timestamp
     };
+    
+    // メタデータがある場合は追加
+    if (metadata) {
+      threadData.metadata = metadata;
+    }
 
     const threads = await helpers.readThreads();
     threads.threads.push(newThreadSummary);
@@ -548,7 +582,7 @@ app.get('/api/token-usage/stats', requireAuth, async (req, res) => {
 app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req, res) => {
   try {
     const { threadId } = req.params;
-    const { content, model, responseFormat, reasoningEffort } = req.body;
+    const { content, model, responseFormat, reasoningEffort, metadata } = req.body;
     
     const thread = await helpers.readThread(threadId);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
@@ -567,7 +601,10 @@ app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req
       return res.status(400).json({ error: modelValidation.error });
     }
     selectedModel = modelValidation.model;
-
+    console.log(selectedModel)
+    console.log(selectedModel)
+    console.log(selectedModel)
+    
     const usageSummary = await helpers.getTokenUsageSummary();
     const modelTier = configs.AVAILABLE_MODELS_HIGH_COST.includes(selectedModel) ? 'highCost' : 'lowCost';
     const tierUsage = usageSummary[modelTier];
@@ -583,14 +620,18 @@ app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req
     }
     
     // ユーザーメッセージを追加
-    const userMessage = {
+    let userMessage = {
       id: helpers.generateId(),
       role: 'user',
       content,
       timestamp: new Date().toISOString()
     };
+    if (metadata) {
+      userMessage.metadata = metadata;
+    }
     thread.messages.push(userMessage);
-    
+    console.log("thread")
+    console.log(thread)
     // 一旦ユーザーメッセージを保存
     thread.updatedAt = new Date().toISOString();
     await helpers.writeThread(threadId, thread);
@@ -1457,6 +1498,56 @@ app.get('/api/threads/:threadId/messages', requireAuth, async (req, res) => {
   }
 });
 
+// メッセージ追加のみ（応答なし・グループスレッド用）
+app.post('/api/threads/:threadId/messages/append', requireAuth, async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { role, content, metadata } = req.body;
+
+    if (!content || !content.trim()) {
+      return res.status(400).json({ error: 'Message content is required' });
+    }
+
+    if (!role || !['user', 'assistant'].includes(role)) {
+      return res.status(400).json({ error: 'Valid role (user or assistant) is required' });
+    }
+
+    const thread = await helpers.readThread(threadId);
+    if (!thread) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+
+    const newMessage = {
+      id: helpers.generateId(),
+      role,
+      content: content.trim(),
+      timestamp: new Date().toISOString()
+    };
+
+    // メタデータがある場合は追加（グループスレッド用）
+    if (metadata) {
+      newMessage.metadata = metadata;
+    }
+
+    thread.messages.push(newMessage);
+    thread.updatedAt = new Date().toISOString();
+
+    await helpers.writeThread(threadId, thread);
+
+    res.json({
+      message: newMessage,
+      thread: {
+        id: thread.id,
+        messageCount: thread.messages.length,
+        updatedAt: thread.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('[Append Message Error]:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ====================
 // メッセージ使用統計 API
 // ====================
@@ -1867,9 +1958,22 @@ app.get('/auth/discord/login', (req, res) => {
       client_id: configs.DISCORD_CONFIG.CLIENT_ID,
       redirect_uri: configs.DISCORD_CONFIG.CALLBACK_URL,
       response_type: 'code',
-      scope: 'identify email guilds bot openid', // scope の 種類はここを参照 https://discord.com/developers/docs/topics/oauth2
+      scope: 'identify email guilds bot openid',
+      permissions: PermissionFlagsBits.Administrator,
       state: state
     });
+    // permissions の設定方法は以下。力技ならAdministratorでいい。
+    // console.log(PermissionFlagsBits.ManageChannels + PermissionFlagsBits.ViewChannel + PermissionFlagsBits.SendMessages + PermissionFlagsBits.EmbedLinks + PermissionFlagsBits.ReadMessageHistory + PermissionFlagsBits.AttachFiles);
+    // console.log(PermissionFlagsBits.Administrator);
+
+    // scope の 種類はここを参照 https://discord.com/developers/docs/topics/oauth2
+    // console.log(OAuth2Scopes.ApplicationsCommands);
+    // console.log(OAuth2Scopes.ApplicationsCommands + " " + OAuth2Scopes.Bot + " " + OAuth2Scopes.Voice);
+    // identify - email 抜きでユーザーの情報を取得するスコープ
+    // email - ユーザーの情報を取得する際に email も取得するスコープ
+    // bot - Botをサーバーに追加するための基本スコープ
+    // applications.commands - スラッシュコマンドを使用するためのスコープ
+    // voice - Voice Channel への参加と VC にいるメンバーの取得のためのスコープ
 
     // オプション: 特定のギルドへの参加を促す
     if (guildId) {
@@ -2238,7 +2342,7 @@ app.get('/auth/discord/callback', async (req, res) => {
             <p><strong>ユーザー:</strong> ${username}#${discriminator}</p>
             <p><strong>権限:</strong> ${user.authority}</p>
           </div>
-          <p id="message">リダイレクト中<span class="spinner"></span></p>
+          <!-- <p id="message">リダイレクト中<span class="spinner"></span></p> -->
         </div>
         <script>
           // JWTトークンをlocalStorageに保存
