@@ -2419,7 +2419,7 @@
                 const data = await response.json();
                 
                 if (data.user && typeof data.user.remaining_credit === 'number') {
-                    updateCreditDisplay(data.user.remaining_credit);
+                    updateCreditDisplay(data.user.remaining_credit, data.user.paid_credit || 0);
                 }
                 
                 // サーバーから最大表示値を取得（存在する場合）
@@ -2432,53 +2432,80 @@
         }
         
         // クレジット表示を更新（対数スケール）
-        function updateCreditDisplay(remainingCredit) {
+        function updateCreditDisplay(remainingCredit = 0, paidCredit = 0) {
             const creditAmount = document.getElementById('creditAmount');
             const creditText = document.getElementById('creditText');
             const creditBar = document.getElementById('creditBar');
-            
+
             if (!creditAmount || !creditText || !creditBar) return;
-            
-            // クレジットが0以下の場合は特別な表示
-            if (remainingCredit <= 0) {
-                creditAmount.textContent = remainingCredit.toLocaleString();
+
+            const totalCredit = Math.max(0, remainingCredit + paidCredit);
+
+            // 0以下のときは従来のエラー表示
+            if (totalCredit <= 0) {
+                creditAmount.textContent = '残り0 (内無料枠0)';
                 creditAmount.style.color = '#ff3333';
                 creditAmount.style.fontWeight = 'bold';
                 creditAmount.style.fontSize = '14px';
-                
+
                 creditText.textContent = '残高不足';
                 creditText.style.color = '#ff3333';
                 creditText.style.fontWeight = 'bold';
-                
+
                 creditBar.style.width = '0%';
+                creditBar.style.background = '';
                 creditBar.className = 'token-usage-fill danger';
                 return;
             }
-            
-            // 通常の表示（0より大きい場合）
+
+            // 通常表示
             creditAmount.style.color = '#aaa';
             creditAmount.style.fontWeight = 'normal';
             creditAmount.style.fontSize = '11px';
             creditText.style.color = '#aaa';
             creditText.style.fontWeight = 'normal';
-            
-            // 数値を表示（カンマ区切り）
-            creditAmount.textContent = remainingCredit.toLocaleString();
-            
-            // 対数スケールでパーセンテージを計算
-            const logCredit = Math.log10(remainingCredit);
+
+            // 「残りxxxx (内無料枠yyyy)」
+            creditAmount.textContent = `残り${totalCredit.toLocaleString()} (内無料枠${remainingCredit.toLocaleString()})`;
+            creditText.textContent = '';
+
+            // 対数スケール
+            const logCredit = Math.log10(totalCredit);
+            const logPaidCredit = Math.log10(paidCredit);
             const logMax = Math.log10(CREDIT_MAX_DISPLAY);
             let percentage = (logCredit / logMax) * 100;
             percentage = Math.min(Math.max(percentage, 0), 100);
-            
-            creditText.textContent = ``;
             creditBar.style.width = `${percentage}%`;
-            
-            // 色分け（残クレジットが少ない場合に警告）
+
+            // バー内の有料／無料配色
+            const paidPercent = totalCredit === 0 ? 0 : (paidCredit / totalCredit) * 100;
+            const paidColorStart = '#caa236';                  // 金色
+            const paidColorEnd = '#ffd76a';                  // 金色
+            const freeColorStart = '#0facc3';                  // これまでの色に合わせて変更
+            const freeColorEnd = '#4fecff';                  // これまでの色に合わせて変更
+            if (paidPercent <= 0) {
+                creditBar.style.background = `linear-gradient(to right,
+                    ${freeColorStart} 0%,
+                    ${freeColorEnd} 100%)`;
+            } else if (paidPercent >= 100) {
+                creditBar.style.background = `linear-gradient(to right,
+                    ${paidColorStart} 0%,
+                    ${paidColorEnd} 100%)`;
+            } else {
+                let paidCreditBarPercentage = (logPaidCredit / logMax) * 100;
+                paidCreditBarPercentage = Math.min(Math.max(paidCreditBarPercentage, 0), 100);
+                creditBar.style.background = `linear-gradient(to right,
+                    ${paidColorStart} 0%,
+                    ${paidColorEnd} ${paidCreditBarPercentage}%,
+                    ${freeColorStart} ${paidCreditBarPercentage}%,
+                    ${freeColorEnd} 100%)`;
+                }
+
+            // 警告色の付与（合計値で判定）
             creditBar.className = 'token-usage-fill';
-            if (remainingCredit < 1000) {
+            if (totalCredit < 3000) {
                 creditBar.classList.add('danger');
-            } else if (remainingCredit < 5000) {
+            } else if (totalCredit < 10000) {
                 creditBar.classList.add('warning');
             }
         }

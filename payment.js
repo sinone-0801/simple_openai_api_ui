@@ -164,21 +164,17 @@ async function handleCheckoutCompleted(session) {
   }
 
   try {
-    // クレジットを付与（Admin権限で実行）
-    // この関数は内部処理なので、直接DBを更新
+    // 有料クレジットを付与（内部関数を使用）
     const user = await auth.getUser(userId);
     if (!user) {
       console.error(`User not found: ${userId}`);
       return;
     }
 
-    // 管理者として自分自身に権限を与える処理
-    // 実際には、この関数は内部から呼ばれるので、直接クレジットを追加
-    await auth.updateUser(userId, {
-      remaining_credit: user.remaining_credit + credits
-    });
+    // 有料クレジットを追加
+    await auth.addPaidCreditInternal(userId, credits);
 
-    console.log(`✓ Credits added to user ${userId}: +${credits} credits (Total: ${user.remaining_credit + credits})`);
+    console.log(`✓ Paid credits added to user ${userId}: +${credits} paid credits (Total paid: ${(user.paid_credit || 0) + credits})`);
     
     // 購入履歴の記録（オプション: 別テーブルで管理する場合）
     await recordPurchaseHistory({
@@ -190,7 +186,7 @@ async function handleCheckoutCompleted(session) {
     });
 
   } catch (error) {
-    console.error('Error adding credits:', error);
+    console.error('Error adding paid credits:', error);
     // エラー処理: 管理者に通知など
   }
 }

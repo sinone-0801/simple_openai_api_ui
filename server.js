@@ -224,15 +224,30 @@ async function requireAdmin(req, res, next) {
 async function checkCredit(req, res, next) {
   const user = req.user;
   
-  if (user.authority === auth.Authority.ADMIN || user.authority === auth.Authority.VIP) {
-    // AdminとVIPはクレジットチェックをスキップ
+  // Admin権限は常にスキップ
+  if (user.authority === auth.Authority.ADMIN) {
     return next();
   }
 
-  if (user.remaining_credit <= 0) {
+  // VIP権限もスキップ
+  if (user.authority === auth.Authority.VIP) {
+    return next();
+  }
+
+  // 有料クレジットがある場合は無料クレジットやトークン制限を無視
+  if ((user.paid_credit || 0) > 0) {
+    return next();
+  }
+
+  // 有料クレジット + 無料クレジットの合計をチェック
+  const totalCredit = (user.paid_credit || 0) + (user.remaining_credit || 0);
+  if (totalCredit < 0) {
     return res.status(402).json({ 
       error: 'Insufficient credit',
-      remaining_credit: user.remaining_credit
+      paidCredit: user.paid_credit || 0,
+      freeCredit: user.remaining_credit || 0,
+      totalCredit: totalCredit,
+      message: 'クレジットが不足しています。クレジットを購入してください。（無料クレジットは開発者の気分で不定期に配布されます）'
     });
   }
 
@@ -605,18 +620,22 @@ app.post('/api/threads/:threadId/messages', requireAuth, checkCredit, async (req
     console.log(selectedModel)
     console.log(selectedModel)
     
-    const usageSummary = await helpers.getTokenUsageSummary();
-    const modelTier = configs.AVAILABLE_MODELS_HIGH_COST.includes(selectedModel) ? 'highCost' : 'lowCost';
-    const tierUsage = usageSummary[modelTier];
-    if (tierUsage.usage >= tierUsage.limit * configs.LIMIT_THRESHOLD_RATIO) {
-      return res.status(429).json({
-        error: 'TOKEN_LIMIT_APPROACHING',
-        message: '24時間の無料利用枠がまもなく上限に達するため、しばらく待ってから再度お試しください。',
-        usage: {
-          modelTier,
-          ...tierUsage
-        }
-      });
+    // 有料クレジットがある場合はトークン制限をスキップ
+    const hasPaidCredit = (req.user.paid_credit || 0) > 0;
+    if (!hasPaidCredit) {
+      const usageSummary = await helpers.getTokenUsageSummary();
+      const modelTier = configs.AVAILABLE_MODELS_HIGH_COST.includes(selectedModel) ? 'highCost' : 'lowCost';
+      const tierUsage = usageSummary[modelTier];
+      if (tierUsage.usage >= tierUsage.limit * configs.LIMIT_THRESHOLD_RATIO) {
+        return res.status(429).json({
+          error: 'TOKEN_LIMIT_APPROACHING',
+          message: '24時間の無料利用枠がまもなく上限に達するため、しばらく待ってから再度お試しください。有料クレジットを購入すると、この制限なしでご利用いただけます。',
+          usage: {
+            modelTier,
+            ...tierUsage
+          }
+        });
+      }
     }
     
     // ユーザーメッセージを追加
@@ -1933,6 +1952,21 @@ app.post('/api/auth/change-password', requireAuth, async (req, res) => {
   }
 });
 
+// クレジット情報取得
+app.get('/api/auth/credit-info', requireAuth, async (req, res) => {
+  try {
+    const creditInfo = await auth.getCreditInfo(req.user.user_id);
+    
+    if (!creditInfo) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json(creditInfo);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ====================
 // Discord用 API
 // ====================
@@ -2595,7 +2629,23 @@ app.post('/api/admin/users/:userId/credit/add', requireAuth, requireAdmin, async
     }
 
     const user = await auth.addCredit(req.user.user_id, req.params.userId, amount);
-    res.json({ user, message: 'Credit added successfully' });
+    res.json({ user, message: 'Free credit added successfully' });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// 有料クレジット追加（Admin専用）
+app.post('/api/admin/users/:userId/paid-credit/add', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: 'Valid amount required' });
+    }
+
+    const user = await auth.addPaidCredit(req.user.user_id, req.params.userId, amount);
+    res.json({ user, message: 'Paid credit added successfully' });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

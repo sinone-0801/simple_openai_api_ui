@@ -33,17 +33,18 @@ function displayMenu() {
   console.log('  2. ユーザー作成');
   console.log('  3. ユーザー情報更新');
   console.log('  4. パスワード変更');
-  console.log('  5. クレジット付与');
-  console.log('  6. クレジットリセット');
-  console.log('  7. ユーザー削除');
-  console.log('  8. アカウント停止');
-  console.log('  9. アカウントBAN');
-  console.log(' 10. アカウント復活');
-  console.log(' 11. CSV出力（全ユーザー情報）');
-  console.log(' 12. CSVインポート（ユーザー情報上書き）');
-  console.log(' 13. 初期セットアップ（最初の管理者を作成）');
+  console.log('  5. 無料クレジット付与');
+  console.log('  6. 有料クレジット付与');
+  console.log('  7. クレジットリセット');
+  console.log('  8. ユーザー削除');
+  console.log('  9. アカウント停止');
+  console.log(' 10. アカウントBAN');
+  console.log(' 11. アカウント復活');
+  console.log(' 12. CSV出力（全ユーザー情報）');
+  console.log(' 13. CSVインポート（ユーザー情報上書き）');
+  console.log(' 14. 初期セットアップ（最初の管理者を作成）');
   console.log(
-    ` 14. BOTアカウント発行（${
+    ` 15. BOTアカウント発行（${
       botUserId ? `推奨: ${botUserId}` : '.env の BOT_USER_ID 未設定'
     }）`
   );
@@ -66,29 +67,32 @@ async function listUsers() {
 
   console.log(`\n登録ユーザー数: ${users.length}\n`);
   
-  // テーブル形式で表示
+  // テーブル形式で表示（有料クレジットを追加）
   console.log('ID'.padEnd(20) + 
               'Authority'.padEnd(12) + 
-              'Remaining'.padEnd(15) + 
+              'Paid'.padEnd(15) +
+              'Free'.padEnd(15) + 
               'Used'.padEnd(15) + 
               'Active');
-  console.log('-'.repeat(60));
+  console.log('-'.repeat(87));
   
   for (const user of users) {
     const isActive = user.is_active ? '✓' : '✗';
-    const remaining = user.remaining_credit.toLocaleString().padEnd(14);
-    const used = user.used_credit.toLocaleString().padEnd(14);
+    const paidCredit = (user.paid_credit || 0).toLocaleString().padEnd(14);
+    const freeCredit = (user.remaining_credit || 0).toLocaleString().padEnd(14);
+    const used = (user.used_credit || 0).toLocaleString().padEnd(14);
     
     console.log(
       user.user_id.padEnd(20) +
       user.authority.padEnd(12) +
-      remaining +
+      paidCredit +
+      freeCredit +
       used +
       isActive
     );
   }
   
-  console.log('-'.repeat(60));
+  console.log('-'.repeat(87));
 }
 
 // ユーザー作成
@@ -143,7 +147,7 @@ async function createUser() {
   };
   const authority = authorityMap[authorityChoice] || auth.Authority.USER;
 
-  const creditInput = await question('初期クレジット (デフォルト: 10000000): ');
+  const creditInput = await question('初期無料クレジット (デフォルト: 10000000): ');
   const remainingCredit = parseInt(creditInput) || 10000000;
 
   try {
@@ -158,11 +162,12 @@ async function createUser() {
 
     console.log('\n✓ ユーザーを作成しました！');
     console.log('-'.repeat(60));
-    console.log('User ID:          ', user.userId);
-    console.log('Authority:        ', user.authority);
-    console.log('Group ID:         ', user.groupId || 'N/A');
-    console.log('Thread ID:        ', user.threadId || 'N/A');
-    console.log('Remaining Credit: ', user.remainingCredit.toLocaleString());
+    console.log('User ID:               ', user.userId);
+    console.log('Authority:             ', user.authority);
+    console.log('Group ID:              ', user.groupId || 'N/A');
+    console.log('Thread ID:             ', user.threadId || 'N/A');
+    console.log('Free Credit (初期):     ', user.remainingCredit.toLocaleString());
+    console.log('Paid Credit:           ', '0');
     console.log('-'.repeat(60));
 
     if (password) {
@@ -202,17 +207,19 @@ async function updateUser() {
   console.log('Authority:        ', user.authority);
   console.log('Group ID:         ', user.group_id || 'N/A');
   console.log('Thread ID:        ', user.thread_id || 'N/A');
-  console.log('Remaining Credit: ', user.remaining_credit.toLocaleString());
-  console.log('Used Credit:      ', user.used_credit.toLocaleString());
+  console.log('Paid Credit:      ', (user.paid_credit || 0).toLocaleString());
+  console.log('Free Credit:      ', (user.remaining_credit || 0).toLocaleString());
+  console.log('Used Credit:      ', (user.used_credit || 0).toLocaleString());
   console.log('-'.repeat(60));
 
   console.log('\n変更する項目を選択:');
   console.log('  1. Group ID');
   console.log('  2. Thread ID');
   console.log('  3. Authority');
-  console.log('  4. Remaining Credit');
-  console.log('  5. すべて更新');
-  const choice = await question('選択 (1-5): ');
+  console.log('  4. Free Credit (無料クレジット)');
+  console.log('  5. Paid Credit (有料クレジット)');
+  console.log('  6. すべて更新');
+  const choice = await question('選択 (1-6): ');
 
   const updates = {};
 
@@ -252,10 +259,17 @@ async function updateUser() {
     }
   }
 
-  if (choice === '4' || choice === '5') {
-    const credit = await question(`Remaining Credit (現在: ${user.remaining_credit.toLocaleString()}, 空欄でスキップ): `);
+  if (choice === '4' || choice === '6') {
+    const credit = await question(`Free Credit (現在: ${(user.remaining_credit || 0).toLocaleString()}, 空欄でスキップ): `);
     if (credit.trim()) {
       updates.remaining_credit = parseInt(credit);
+    }
+  }
+
+  if (choice === '5' || choice === '6') {
+    const paidCredit = await question(`Paid Credit (現在: ${(user.paid_credit || 0).toLocaleString()}, 空欄でスキップ): `);
+    if (paidCredit.trim()) {
+      updates.paid_credit = parseInt(paidCredit);
     }
   }
 
@@ -272,7 +286,8 @@ async function updateUser() {
     console.log('Authority:        ', updatedUser.authority);
     console.log('Group ID:         ', updatedUser.group_id || 'N/A');
     console.log('Thread ID:        ', updatedUser.thread_id || 'N/A');
-    console.log('Remaining Credit: ', updatedUser.remaining_credit.toLocaleString());
+    console.log('Paid Credit:      ', (updatedUser.paid_credit || 0).toLocaleString());
+    console.log('Free Credit:      ', (updatedUser.remaining_credit || 0).toLocaleString());
     console.log('-'.repeat(60));
   } catch (error) {
     console.log(`\n❌ エラー: ${error.message}`);
@@ -323,10 +338,10 @@ async function changePassword() {
   }
 }
 
-// クレジット付与
+// 無料クレジット付与
 async function addCredit() {
   console.log('\n' + '-'.repeat(60));
-  console.log('クレジット付与');
+  console.log('無料クレジット付与');
   console.log('-'.repeat(60));
 
   const userId = await question('\nUser ID: ');
@@ -341,9 +356,10 @@ async function addCredit() {
     return;
   }
 
-  console.log(`\n現在のクレジット: ${user.remaining_credit.toLocaleString()} tokens`);
+  console.log(`\n現在の無料クレジット: ${(user.remaining_credit || 0).toLocaleString()} tokens`);
+  console.log(`現在の有料クレジット: ${(user.paid_credit || 0).toLocaleString()} tokens`);
 
-  const amount = await question('付与するクレジット: ');
+  const amount = await question('付与する無料クレジット: ');
   const amountNum = parseInt(amount);
 
   if (isNaN(amountNum) || amountNum <= 0) {
@@ -362,11 +378,64 @@ async function addCredit() {
 
     const updatedUser = await auth.addCredit(adminId, userId.trim(), amountNum);
 
-    console.log('\n✓ クレジットを付与しました！');
+    console.log('\n✓ 無料クレジットを付与しました！');
     console.log('-'.repeat(60));
-    console.log('User ID:              ', updatedUser.user_id);
-    console.log('付与額:               ', amountNum.toLocaleString());
-    console.log('更新後のクレジット:    ', updatedUser.remaining_credit.toLocaleString());
+    console.log('User ID:                    ', updatedUser.user_id);
+    console.log('付与額（無料）:              ', amountNum.toLocaleString());
+    console.log('更新後の無料クレジット:      ', (updatedUser.remaining_credit || 0).toLocaleString());
+    console.log('有料クレジット（変更なし）:  ', (updatedUser.paid_credit || 0).toLocaleString());
+    console.log('-'.repeat(60));
+  } catch (error) {
+    console.log(`\n❌ エラー: ${error.message}`);
+  }
+}
+
+// 有料クレジット付与
+async function addPaidCredit() {
+  console.log('\n' + '-'.repeat(60));
+  console.log('有料クレジット付与');
+  console.log('-'.repeat(60));
+
+  const userId = await question('\nUser ID: ');
+  if (!userId.trim()) {
+    console.log('❌ User IDは必須です。');
+    return;
+  }
+
+  const user = await auth.getUser(userId.trim());
+  if (!user) {
+    console.log('❌ ユーザーが見つかりません。');
+    return;
+  }
+
+  console.log(`\n現在の有料クレジット: ${(user.paid_credit || 0).toLocaleString()} tokens`);
+  console.log(`現在の無料クレジット: ${(user.remaining_credit || 0).toLocaleString()} tokens`);
+
+  const amount = await question('付与する有料クレジット: ');
+  const amountNum = parseInt(amount);
+
+  if (isNaN(amountNum) || amountNum <= 0) {
+    console.log('❌ 正の整数を入力してください。');
+    return;
+  }
+
+  try {
+    // 一時的にAdminユーザーを作成して操作
+    const adminId = '__temp_admin__';
+    await auth.createUser({
+      userId: adminId,
+      authority: auth.Authority.ADMIN,
+      remainingCredit: 0
+    }).catch(() => {}); // 既に存在する場合は無視
+
+    const updatedUser = await auth.addPaidCredit(adminId, userId.trim(), amountNum);
+
+    console.log('\n✓ 有料クレジットを付与しました！');
+    console.log('-'.repeat(60));
+    console.log('User ID:                    ', updatedUser.user_id);
+    console.log('付与額（有料）:              ', amountNum.toLocaleString());
+    console.log('更新後の有料クレジット:      ', (updatedUser.paid_credit || 0).toLocaleString());
+    console.log('無料クレジット（変更なし）:  ', (updatedUser.remaining_credit || 0).toLocaleString());
     console.log('-'.repeat(60));
   } catch (error) {
     console.log(`\n❌ エラー: ${error.message}`);
@@ -391,18 +460,40 @@ async function resetCredit() {
     return;
   }
 
-  console.log(`\n現在のクレジット: ${user.remaining_credit.toLocaleString()} tokens`);
-  console.log(`使用済みクレジット: ${user.used_credit.toLocaleString()} tokens`);
+  console.log(`\n現在の有料クレジット: ${(user.paid_credit || 0).toLocaleString()} tokens`);
+  console.log(`現在の無料クレジット: ${(user.remaining_credit || 0).toLocaleString()} tokens`);
+  console.log(`使用済みクレジット:   ${(user.used_credit || 0).toLocaleString()} tokens`);
 
-  const amount = await question('\n新しいクレジット額: ');
-  const amountNum = parseInt(amount);
+  console.log('\nリセットするクレジットを選択:');
+  console.log('  1. 無料クレジットのみ');
+  console.log('  2. 有料クレジットのみ');
+  console.log('  3. 両方（無料・有料）');
+  const choice = await question('選択 (1-3): ');
 
-  if (isNaN(amountNum) || amountNum < 0) {
-    console.log('❌ 0以上の整数を入力してください。');
-    return;
+  let freeAmount = user.remaining_credit || 0;
+  let paidAmount = user.paid_credit || 0;
+
+  if (choice === '1' || choice === '3') {
+    const amount = await question(`\n新しい無料クレジット額 (現在: ${(user.remaining_credit || 0).toLocaleString()}): `);
+    const amountNum = parseInt(amount);
+    if (isNaN(amountNum)) {
+      console.log('❌ 整数を入力してください。');
+      return;
+    }
+    freeAmount = amountNum;
   }
 
-  const confirm = await question(`\nクレジットを ${amountNum.toLocaleString()} tokens にリセットしますか？ (y/N): `);
+  if (choice === '2' || choice === '3') {
+    const amount = await question(`\n新しい有料クレジット額 (現在: ${(user.paid_credit || 0).toLocaleString()}): `);
+    const amountNum = parseInt(amount);
+    if (isNaN(amountNum) || amountNum < 0) {
+      console.log('❌ 0以上の整数を入力してください。');
+      return;
+    }
+    paidAmount = amountNum;
+  }
+
+  const confirm = await question(`\nクレジットをリセットしますか？\n無料: ${freeAmount.toLocaleString()}, 有料: ${paidAmount.toLocaleString()} (y/N): `);
   if (confirm.toLowerCase() !== 'y') {
     console.log('キャンセルしました。');
     return;
@@ -417,13 +508,24 @@ async function resetCredit() {
       remainingCredit: 0
     }).catch(() => {});
 
-    const updatedUser = await auth.resetCredit(adminId, userId.trim(), amountNum);
+    // 無料クレジットをリセット（auth.resetCreditは無料クレジットのリセット）
+    if (choice === '1' || choice === '3') {
+      await auth.resetCredit(adminId, userId.trim(), freeAmount);
+    }
+
+    // 有料クレジットを更新
+    if (choice === '2' || choice === '3') {
+      await auth.updateUser(userId.trim(), { paid_credit: paidAmount });
+    }
+
+    const updatedUser = await auth.getUser(userId.trim());
 
     console.log('\n✓ クレジットをリセットしました！');
     console.log('-'.repeat(60));
     console.log('User ID:              ', updatedUser.user_id);
-    console.log('新しいクレジット:      ', updatedUser.remaining_credit.toLocaleString());
-    console.log('使用済みクレジット:    ', updatedUser.used_credit.toLocaleString());
+    console.log('有料クレジット:        ', (updatedUser.paid_credit || 0).toLocaleString());
+    console.log('無料クレジット:        ', (updatedUser.remaining_credit || 0).toLocaleString());
+    console.log('使用済みクレジット:    ', (updatedUser.used_credit || 0).toLocaleString());
     console.log('-'.repeat(60));
   } catch (error) {
     console.log(`\n❌ エラー: ${error.message}`);
@@ -662,6 +764,7 @@ async function exportToCSV() {
       'authority',
       'used_credit',
       'remaining_credit',
+      'paid_credit',
       'created_at',
       'updated_at',
       'last_login',
@@ -681,6 +784,7 @@ async function exportToCSV() {
         escapeCsvField(user.authority),
         user.used_credit || 0,
         user.remaining_credit || 0,
+        user.paid_credit || 0,
         escapeCsvField(user.created_at || ''),
         escapeCsvField(user.updated_at || ''),
         escapeCsvField(user.last_login || ''),
@@ -926,9 +1030,9 @@ async function insertUserDirectly(userData) {
   await db.run(`
     INSERT INTO users (
       user_id, password_hash, salt, group_id, thread_id,
-      authority, used_credit, remaining_credit, created_at,
+      authority, used_credit, remaining_credit, paid_credit, created_at,
       updated_at, last_login, is_active
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     userData.user_id,
     userData.password_hash || null,
@@ -938,6 +1042,7 @@ async function insertUserDirectly(userData) {
     userData.authority || 'User',
     parseInt(userData.used_credit) || 0,
     parseInt(userData.remaining_credit) || 0,
+    parseInt(userData.paid_credit) || 0,
     userData.created_at || new Date().toISOString(),
     userData.updated_at || new Date().toISOString(),
     userData.last_login || null,
@@ -966,6 +1071,7 @@ async function updateUserDirectly(userData) {
       authority = ?,
       used_credit = ?,
       remaining_credit = ?,
+      paid_credit = ?,
       created_at = ?,
       updated_at = ?,
       last_login = ?,
@@ -979,6 +1085,7 @@ async function updateUserDirectly(userData) {
     userData.authority || 'User',
     parseInt(userData.used_credit) || 0,
     parseInt(userData.remaining_credit) || 0,
+    parseInt(userData.paid_credit) || 0,
     userData.created_at || new Date().toISOString(),
     userData.updated_at || new Date().toISOString(),
     userData.last_login || null,
@@ -1015,30 +1122,33 @@ async function main() {
           await addCredit();
           break;
         case '6':
-          await resetCredit();
+          await addPaidCredit();
           break;
         case '7':
-          await deleteUser();
+          await resetCredit();
           break;
         case '8':
-          await stopAccount();
+          await deleteUser();
           break;
         case '9':
-          await banAccount();
+          await stopAccount();
           break;
         case '10':
-          await reactivateAccount();
+          await banAccount();
           break;
         case '11':
-          await exportToCSV();
+          await reactivateAccount();
           break;
         case '12':
-          await importFromCSV();
+          await exportToCSV();
           break;
         case '13':
-          await runInitialSetup();
+          await importFromCSV();
           break;
         case '14':
+          await runInitialSetup();
+          break;
+        case '15':
           await createBotAccount();
           break;
         case '0':

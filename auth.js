@@ -42,6 +42,7 @@ export async function initDatabase() {
       authority TEXT NOT NULL DEFAULT 'User',
       used_credit INTEGER DEFAULT 0,
       remaining_credit INTEGER DEFAULT 0,
+      paid_credit INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       last_login DATETIME,
@@ -52,6 +53,17 @@ export async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_authority ON users(authority);
     CREATE INDEX IF NOT EXISTS idx_is_active ON users(is_active);
   `);
+
+  // 既存テーブルに paid_credit カラムを追加（マイグレーション）
+  try {
+    await db.exec(`ALTER TABLE users ADD COLUMN paid_credit INTEGER DEFAULT 0`);
+    console.log('✓ Added paid_credit column to existing users table');
+  } catch (error) {
+    // カラムが既に存在する場合はエラーになるが、それは正常
+    if (!error.message.includes('duplicate column name')) {
+      console.error('Error adding paid_credit column:', error);
+    }
+  }
 
   console.log('User database initialized');
 }
@@ -213,7 +225,7 @@ export async function getAllUsers() {
 
 // ユーザー情報の更新
 export async function updateUser(userId, updates) {
-  const allowedFields = ['group_id', 'thread_id', 'authority', 'remaining_credit'];
+  const allowedFields = ['group_id', 'thread_id', 'authority', 'remaining_credit', 'paid_credit'];
   const updateFields = [];
   const values = [];
 
@@ -334,19 +346,48 @@ export async function deleteAccount(adminUserId, targetUserId) {
 }
 
 // クレジット使用量の記録
+// 消費優先度: 無料クレジットの正の値 > 有料クレジットの正の値 > 無料クレジットの負の値
+// 有料クレジットは常に0以上、無料クレジットには負債も含まれる
 export async function recordCreditUsage(userId, credits) {
   const user = await getUser(userId);
   if (!user) {
     throw new Error('User not found');
   }
 
+  let remainingToConsume = credits;
+  let freeCreditsUsed = 0;
+  let paidCreditsUsed = 0;
+
+  // 1. 無料クレジットの正の値から消費
+  if (user.remaining_credit > 0 && remainingToConsume > 0) {
+    const consumeFromFree = Math.min(user.remaining_credit, remainingToConsume);
+    freeCreditsUsed += consumeFromFree;
+    remainingToConsume -= consumeFromFree;
+  }
+
+  // 2. 有料クレジットから消費
+  if (user.paid_credit > 0 && remainingToConsume > 0) {
+    const consumeFromPaid = Math.min(user.paid_credit, remainingToConsume);
+    paidCreditsUsed += consumeFromPaid;
+    remainingToConsume -= consumeFromPaid;
+  }
+
+  // 3. 残りは無料クレジットを負の値にする（負債）
+  if (remainingToConsume > 0) {
+    freeCreditsUsed += remainingToConsume;
+  }
+
+  // データベースを更新
   await db.run(`
     UPDATE users
     SET used_credit = used_credit + ?,
         remaining_credit = remaining_credit - ?,
+        paid_credit = paid_credit - ?,
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
-  `, [credits, credits, userId]);
+  `, [credits, freeCreditsUsed, paidCreditsUsed, userId]);
+
+  console.log(`[Credit Usage] User: ${userId}, Total: ${credits}, Free: ${freeCreditsUsed}, Paid: ${paidCreditsUsed}`);
 
   return getUser(userId);
 }
@@ -366,6 +407,115 @@ export async function addCredit(adminUserId, targetUserId, amount) {
   `, [amount, targetUserId]);
 
   return getUser(targetUserId);
+}
+
+// 有料クレジットの追加（Admin用）
+export async function addPaidCredit(adminUserId, targetUserId, amount) {
+  const admin = await getUser(adminUserId);
+  if (!admin || admin.authority !== Authority.ADMIN) {
+    throw new Error('Unauthorized: Admin only');
+  }
+
+  // 処理をまとめて整合性を保つ (BeginするとCommitするまで変更が確定されず、Rollback可能)
+  await db.run('BEGIN');
+  try {
+    const user = await db.get(
+      'SELECT remaining_credit FROM users WHERE user_id = ?',
+      [targetUserId]
+    );
+    if (!user) throw new Error(`User ${targetUserId} not found`);
+
+    let remaining_amount = amount;
+    const remaining_credit = user.remaining_credit ?? 0;
+
+    // 無料クレジットが負（負債）なら、まずその分を補填
+    if (remaining_credit < 0) {
+      const debt = Math.min(remaining_amount, Math.abs(remaining_credit));
+      if (debt > 0) {
+        remaining_amount -= debt;
+        await db.run(
+          `
+            UPDATE users
+            SET remaining_credit = remaining_credit + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+          `,
+          [debt, targetUserId]
+        );
+      }
+    }
+
+    // 残りがあれば有料クレジットに加算
+    if (remaining_amount > 0) {
+      await db.run(
+        `
+          UPDATE users
+          SET paid_credit = paid_credit + ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE user_id = ?
+        `,
+        [remaining_amount, targetUserId]
+      );
+    }
+
+    await db.run('COMMIT');
+    return getUser(targetUserId);
+  } catch (err) {
+    await db.run('ROLLBACK');
+    throw err;
+  }
+}
+
+// 有料クレジットの追加（内部処理用 - Stripe決済完了時に使用）
+export async function addPaidCreditInternal(userId, amount) {
+  // 処理をまとめて整合性を保つ (BeginするとCommitするまで変更が確定されず、Rollback可能)
+  await db.run('BEGIN');
+  try {
+    const user = await db.get(
+      'SELECT remaining_credit FROM users WHERE user_id = ?',
+      [userId]
+    );
+    if (!user) throw new Error(`User ${userId} not found`);
+
+    let remaining_amount = amount;
+    const remaining_credit = user.remaining_credit ?? 0;
+
+    // 無料クレジットが負（負債）なら、まずその分を補填
+    if (remaining_credit < 0) {
+      const debt = Math.min(remaining_amount, Math.abs(remaining_credit));
+      if (debt > 0) {
+        remaining_amount -= debt;
+        await db.run(
+          `
+            UPDATE users
+            SET remaining_credit = remaining_credit + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+          `,
+          [debt, userId]
+        );
+      }
+    }
+
+    // 残りがあれば有料クレジットに加算
+    if (remaining_amount > 0) {
+      await db.run(
+        `
+          UPDATE users
+          SET paid_credit = paid_credit + ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE user_id = ?
+        `,
+        [remaining_amount, userId]
+      );
+    }
+
+    await db.run('COMMIT');
+    return getUser(userId);
+  } catch (err) {
+    await db.run('ROLLBACK');
+    throw err;
+  }
 }
 
 // クレジットのリセット（Admin用）
@@ -402,12 +552,37 @@ export async function isAdmin(userId) {
 }
 
 // クレジット残高チェック
+// 有料クレジット + 無料クレジットの合計が必要量以上かチェック
 export async function hasEnoughCredit(userId, requiredTokens) {
   const user = await getUser(userId);
   if (!user) {
     return false;
   }
-  return user.remaining_credit >= requiredTokens;
+  const totalCredit = (user.paid_credit || 0) + (user.remaining_credit || 0);
+  return totalCredit >= requiredTokens;
+}
+
+// 有料クレジットの残高チェック
+export async function hasPaidCredit(userId) {
+  const user = await getUser(userId);
+  if (!user) {
+    return false;
+  }
+  return (user.paid_credit || 0) > 0;
+}
+
+// クレジット情報を取得
+export async function getCreditInfo(userId) {
+  const user = await getUser(userId);
+  if (!user) {
+    return null;
+  }
+  return {
+    paidCredit: user.paid_credit || 0,
+    freeCredit: user.remaining_credit || 0,
+    totalCredit: (user.paid_credit || 0) + (user.remaining_credit || 0),
+    usedCredit: user.used_credit || 0
+  };
 }
 
 // データベースのクローズ

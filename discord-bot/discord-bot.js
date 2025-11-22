@@ -443,6 +443,7 @@ async function hasAuthority(userId, guildId, requiredAuthority) {
 }
 
 async function createUser(targetUserId, guildId, authority, credit = CONFIG.BOT_DEFAULT_CREDIT) {
+  // 注: creditは無料クレジット(remainingCredit)として設定されます
   return authenticatedBotRequest('/api/admin/users', guildId, {
     method: 'POST',
     body: JSON.stringify({ userId: targetUserId, groupId: guildId, authority, remainingCredit: credit })
@@ -577,7 +578,7 @@ const commands = [
   new SlashCommandBuilder().setName('add-user').setDescription('新しいユーザーを追加（Admin専用）')
     .addUserOption(o => o.setName('user').setDescription('追加するユーザー').setRequired(true))
     .addStringOption(o => o.setName('authority').setDescription('権限レベル').setRequired(true).addChoices({ name: 'VIP', value: Authority.VIP }, { name: 'User', value: Authority.USER }))
-    .addIntegerOption(o => o.setName('credit').setDescription('初期クレジット量').setRequired(false).setMinValue(0)).toJSON(),
+    .addIntegerOption(o => o.setName('credit').setDescription('初期無料クレジット量').setRequired(false).setMinValue(0)).toJSON(),
   new SlashCommandBuilder().setName('request-access-user').setDescription('ユーザーからBotへのアクセス権限をリクエスト').toJSON(),
   new SlashCommandBuilder().setName('my-info').setDescription('自分のアカウント情報を表示').toJSON(),
   new SlashCommandBuilder().setName('request-access-guild').setDescription('このサーバーからBotへのアクセス権限をリクエスト（Admin専用）').toJSON(),
@@ -627,7 +628,7 @@ async function handleAddUser(interaction) {
       return;
     }
     await createUser(targetUser.id, guildId, authority, credit);
-    await interaction.editReply({ embeds: [createSuccessEmbed('ユーザーを追加しました', `**ユーザー:** ${targetUser.tag}\n**権限:** ${authority}\n**クレジット:** ${credit.toLocaleString()} tokens`)] });
+    await interaction.editReply({ embeds: [createSuccessEmbed('ユーザーを追加しました', `**ユーザー:** ${targetUser.tag}\n**権限:** ${authority}\n**無料クレジット:** ${credit.toLocaleString()} credits`)] });
     console.log(`[Command] User ${targetUser.id} added by ${adminUserId} with authority ${authority} in guild ${guildId}`);
   } catch (error) {
     console.error('[Command Error] /add-user:', error);
@@ -720,16 +721,34 @@ async function handleMyInfo(interaction) {
       return;
     }
     const statusEmoji = { [Authority.ADMIN]: '👑', [Authority.VIP]: '⭐', [Authority.USER]: '👤', [Authority.PENDING]: '⏳', [Authority.STOPPED]: '⏸️', [Authority.BANNED]: '🚫' };
+    
+    const paidCredit = user.paid_credit || 0;
+    const freeCredit = user.remaining_credit || 0;
+    const totalCredit = paidCredit + freeCredit;
+    
     const embed = new EmbedBuilder().setColor(0x0099FF).setTitle('📊 アカウント情報')
       .addFields(
         { name: 'ユーザーID', value: user.user_id, inline: true },
         { name: '権限', value: `${statusEmoji[user.authority] || '❓'} ${user.authority}`, inline: true },
         { name: '状態', value: user.isActive ? '✅ 有効' : '❌ 無効', inline: true },
-        { name: '残りクレジット', value: `${user.remaining_credit.toLocaleString()} tokens`, inline: true },
-        { name: '使用クレジット', value: `${user.used_credit.toLocaleString()} tokens`, inline: true },
+        { name: '💳 有料クレジット', value: `${paidCredit.toLocaleString()} credits`, inline: true },
+        { name: '🎁 無料クレジット', value: `${freeCredit.toLocaleString()} credits`, inline: true },
+        { name: '📊 合計クレジット', value: `${totalCredit.toLocaleString()} credits`, inline: true },
+        { name: '使用クレジット', value: `${user.used_credit.toLocaleString()} credits`, inline: false },
         { name: '登録日', value: new Date(user.created_at).toLocaleString('ja-JP'), inline: false }
       ).setTimestamp();
+    
     if (user.last_login) embed.addFields({ name: '最終ログイン', value: new Date(user.last_login).toLocaleString('ja-JP'), inline: false });
+    
+    // 負債状態の場合は警告を追加
+    if (paidCredit === 0 && freeCredit < 0) {
+      embed.setColor(0xFF0000);
+      embed.setFooter({ text: '⚠️ クレジットが負債状態です。クレジットを購入してください。' });
+    } else if (totalCredit < 100000) {
+      embed.setColor(0xFFAA00);
+      embed.setFooter({ text: '⚠️ クレジット残高が少なくなっています。' });
+    }
+    
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
     console.error('[Command Error] /my-info:', error);
@@ -977,9 +996,24 @@ client.on('messageCreate', async (message) => {
           return;
         }
         
-        if (user.remaining_credit <= 0) {
-          await message.reply({ embeds: [createErrorEmbed('クレジット残高が不足しています。')] });
-          return;
+        // 新しいクレジットチェック: Admin/VIPはスキップ、一般ユーザーは有料+無料の合計をチェック
+        if (user.authority !== Authority.ADMIN && user.authority !== Authority.VIP) {
+          const paidCredit = user.paid_credit || 0;
+          const freeCredit = user.remaining_credit || 0;
+          const totalCredit = paidCredit + freeCredit;
+          
+          if (totalCredit < 0) {
+            await message.reply({ 
+              embeds: [createErrorEmbed(
+                'クレジット残高が不足しています。\n' +
+                `有料クレジット: ${paidCredit.toLocaleString()} credits\n` +
+                `無料クレジット: ${freeCredit.toLocaleString()} credits\n` +
+                `合計: ${totalCredit.toLocaleString()} credits\n\n` +
+                'クレジットを購入してください。'
+              )] 
+            });
+            return;
+          }
         }
         
         // 応答を生成
@@ -992,8 +1026,33 @@ client.on('messageCreate', async (message) => {
         // アクティビティを更新（Botの書き込み）
         await updateChannelActivity(guildId, channelId, true);
         
-        if (response.user && response.user.remaining_credit < 1000000) {
-          await message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFFAA00).setTitle('⚠️ クレジット残高警告').setDescription(`クレジット残高が少なくなっています。\n残高: ${response.user.remaining_credit.toLocaleString()} tokens`)] });
+        // クレジット残高警告（新しい仕様）
+        if (response.user) {
+          const paidCredit = response.user.paid_credit || 0;
+          const freeCredit = response.user.remaining_credit || 0;
+          const totalCredit = paidCredit + freeCredit;
+          
+          // 合計クレジットが100万未満の場合に警告
+          if (totalCredit < 1000000) {
+            const warningEmbed = new EmbedBuilder()
+              .setColor(0xFFAA00)
+              .setTitle('⚠️ クレジット残高警告')
+              .setDescription(
+                `クレジット残高が少なくなっています。\n\n` +
+                `💳 **有料クレジット**: ${paidCredit.toLocaleString()} credits\n` +
+                `🎁 **無料クレジット**: ${freeCredit.toLocaleString()} credits\n` +
+                `📊 **合計**: ${totalCredit.toLocaleString()} credits`
+              );
+            
+            if (paidCredit === 0 && freeCredit < 0) {
+              warningEmbed.addFields({
+                name: '❗ 負債状態',
+                value: 'クレジットを購入することをお勧めします。\n購入されたクレジットは負債の返済から優先的に使用されます。'
+              });
+            }
+            
+            await message.channel.send({ embeds: [warningEmbed] });
+          }
         }
       } else {
         // @メンションがない場合は、メッセージをスレッドに追加するのみ
@@ -1047,17 +1106,60 @@ client.on('messageCreate', async (message) => {
       await message.reply({ embeds: [createErrorEmbed('アカウントがBANされています。')] });
       return;
     }
-    if (user.remaining_credit <= 0) {
-      await message.reply({ embeds: [createErrorEmbed('クレジット残高が不足しています。')] });
-      return;
+    
+    // 新しいクレジットチェック: Admin/VIPはスキップ、一般ユーザーは有料+無料の合計をチェック
+    if (user.authority !== Authority.ADMIN && user.authority !== Authority.VIP) {
+      const paidCredit = user.paid_credit || 0;
+      const freeCredit = user.remaining_credit || 0;
+      const totalCredit = paidCredit + freeCredit;
+      
+      if (totalCredit < 0) {
+        await message.reply({ 
+          embeds: [createErrorEmbed(
+            'クレジット残高が不足しています。\n' +
+            `有料クレジット: ${paidCredit.toLocaleString()} credits\n` +
+            `無料クレジット: ${freeCredit.toLocaleString()} credits\n` +
+            `合計: ${totalCredit.toLocaleString()} credits\n\n` +
+            'クレジットを購入してください。'
+          )] 
+        });
+        return;
+      }
     }
+    
     const threadId = await getOrCreateThread(userId, guildId, channelId);
     console.log("通常スレッドのメッセージ")
 
     const response = await sendMessage(userId, guildId, threadId, content);
     await sendLongMessage(message.channel, response.assistantMessage.content);
-    if (response.user && response.user.remaining_credit < 1000000) {
-      await message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFFAA00).setTitle('⚠️ クレジット残高警告').setDescription(`クレジット残高が少なくなっています。\n残高: ${response.user.remaining_credit.toLocaleString()} tokens`)] });
+    
+    // クレジット残高警告（新しい仕様）
+    if (response.user) {
+      const paidCredit = response.user.paid_credit || 0;
+      const freeCredit = response.user.remaining_credit || 0;
+      const totalCredit = paidCredit + freeCredit;
+      
+      // 合計クレジットが100万未満の場合に警告
+      if (totalCredit < 1000000) {
+        const warningEmbed = new EmbedBuilder()
+          .setColor(0xFFAA00)
+          .setTitle('⚠️ クレジット残高警告')
+          .setDescription(
+            `クレジット残高が少なくなっています。\n\n` +
+            `💳 **有料クレジット**: ${paidCredit.toLocaleString()} credits\n` +
+            `🎁 **無料クレジット**: ${freeCredit.toLocaleString()} credits\n` +
+            `📊 **合計**: ${totalCredit.toLocaleString()} credits`
+          );
+        
+        if (paidCredit === 0 && freeCredit < 0) {
+          warningEmbed.addFields({
+            name: '❗ 負債状態',
+            value: 'クレジットを購入することをお勧めします。'
+          });
+        }
+        
+        await message.channel.send({ embeds: [warningEmbed] });
+      }
     }
   } catch (error) {
     console.error('[Message Error]:', error);
